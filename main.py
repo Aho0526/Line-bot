@@ -6,12 +6,16 @@ import os
 
 app = Flask(__name__)
 
-line_bot_api = LineBotApi(os.getenv(2007391681))
-handler = WebhookHandler(os.getenv(00eb810e6431ea8586e19d096138b2f3))
+# 環境変数からChannel Access TokenとSecretを取得
+LINE_CHANNEL_ACCESS_TOKEN = os.getenv('LINE_CHANNEL_ACCESS_TOKEN')
+LINE_CHANNEL_SECRET = os.getenv('LINE_CHANNEL_SECRET')
 
-@app.route("/callback", methods=["POST"])
+line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
+handler = WebhookHandler(LINE_CHANNEL_SECRET)
+
+@app.route("/callback", methods=['POST'])
 def callback():
-    signature = request.headers["X-Line-Signature"]
+    signature = request.headers['X-Line-Signature']
     body = request.get_data(as_text=True)
 
     try:
@@ -19,15 +23,14 @@ def callback():
     except InvalidSignatureError:
         abort(400)
 
-    return "OK"
+    return 'OK'
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-    msg = event.message.text
-    reply = f"受け取ったよ：{msg}"
+    reply_text = f"あなたが送ったメッセージ: {event.message.text}"
     line_bot_api.reply_message(
         event.reply_token,
-        TextSendMessage(text=reply)
+        TextSendMessage(text=reply_text)
     )
 
 if __name__ == "__main__":
