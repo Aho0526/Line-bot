@@ -10,20 +10,26 @@ app = Flask(__name__)
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 
+# 値が設定されていない場合はエラーを出す
+if not LINE_CHANNEL_ACCESS_TOKEN or not LINE_CHANNEL_SECRET:
+    raise ValueError("環境変数 LINE_CHANNEL_ACCESS_TOKEN または LINE_CHANNEL_SECRET が設定されていません。")
+
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
 @app.route("/", methods=['POST'])
 def callback():
-    # LINEからの署名を取得
-    signature = request.headers['X-Line-Signature']
-
-    # リクエストボディを取得
+    signature = request.headers.get('X-Line-Signature', '')
     body = request.get_data(as_text=True)
+
+    # デバッグ用ログ（Renderのログに出力されます）
+    print("Signature:", signature)
+    print("Request body:", body)
 
     try:
         handler.handle(body, signature)
     except InvalidSignatureError:
+        print("⚠️ Invalid Signature")
         abort(400)
 
     return 'OK'
