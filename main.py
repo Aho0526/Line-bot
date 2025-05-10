@@ -31,6 +31,9 @@ credentials = ServiceAccountCredentials.from_json_keyfile_name("credentials.json
 gc = gspread.authorize(credentials)
 sheet = gc.open("LineBot").sheet1  # シート名に応じて変更可
 
+# 例: セルの内容を取得
+print(sheet.cell(1, 1).value)
+
 @app.route("/", methods=['POST'])
 def callback():
     signature = request.headers['X-Line-Signature']
