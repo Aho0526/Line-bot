@@ -1,29 +1,38 @@
 import os
 import re
-import csv
 from datetime import datetime
-import requests
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 
 app = Flask(__name__)
 
+# LINE API 認証情報
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
+# Google Sheets API 認証情報
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+credentials = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+gc = gspread.authorize(credentials)
+sheet = gc.open("LineBot").sheet1  # スプレッドシート名を適宜変更
+
 @app.route("/", methods=['POST'])
 def callback():
     signature = request.headers['X-Line-Signature']
     body = request.get_data(as_text=True)
+
     try:
         handler.handle(body, signature)
     except InvalidSignatureError:
         abort(400)
+
     return 'OK'
 
 def calculate_idt(message_text):
@@ -31,6 +40,7 @@ def calculate_idt(message_text):
         match = re.match(r'(\d{1,2}):(\d{2})\.(\d)\s+(\d{2,3}\.\d)\s+(m|w)', message_text.lower())
         if not match:
             return "形式が正しくありません。再確認してください。"
+
         mi = int(match.group(1))
         se = int(match.group(2))
         sed = int(match.group(3))
@@ -48,50 +58,19 @@ def calculate_idt(message_text):
     except Exception as e:
         return f"エラーが発生しました: {str(e)}"
 
-def parse_datetime(input_text):
-    match = re.match(r'(\d{4})[/-](\d{1,2})[/-](\d{1,2})\s+(\d{1,2}):(\d{2})', input_text)
-    if not match:
-        return None
+def write_weight_record(name, weight):
     try:
-        year = int(match.group(1))
-        month = int(match.group(2))
-        day = int(match.group(3))
-        hour = int(match.group(4))
-        minute = int(match.group(5))
-        return datetime(year, month, day, hour, minute)
-    except ValueError:
-        return None
-
-def get_tide_height_at(dt):
-    # 高知県 種崎の潮位予測データ（10分間隔、CSV形式）
-    url = "https://www.data.jma.go.jp/kaiyou/db/tide/suisan/txt/2024/txt/AS3_2024_Kochi_Tanezaki.csv"
-    try:
-        response = requests.get(url)
-        response.encoding = 'shift_jis'
-        lines = response.text.splitlines()
-        reader = csv.reader(lines)
-        next(reader)  # ヘッダーをスキップ
-
-        for row in reader:
-            if len(row) < 2:
-                continue
-            try:
-                timestamp = datetime.strptime(row[0], "%Y/%m/%d %H:%M")
-                if timestamp == dt:
-                    return f"{timestamp.strftime('%Y/%m/%d %H:%M')} の潮位は {row[1]} cm です。"
-            except ValueError:
-                continue
-
-        return "指定された日時の潮位データは見つかりませんでした。10分単位で入力されているか確認してください。"
+        now = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
+        sheet.append_row([name, weight, now])
+        return "記録しました。"
     except Exception as e:
-        return f"潮位データの取得中にエラーが発生しました: {str(e)}"
+        return f"記録に失敗しました: {str(e)}"
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     user_text = event.message.text.strip()
 
-    # IDTガイド
-    if user_text.lower() == "cal idt":
+    if "cal idt" in user_text.lower():
         reply_text = (
             "IDTの計算をするには以下の数値が揃っているか確認してください。\n\n"
             "エルゴタイム:m:ss.s (分:秒.ミリ秒)\n"
@@ -104,23 +83,13 @@ def handle_message(event):
             "記入例:タイム7:32.8、体重56.3kg、男性の場合:7:32.8 56.3 m\n"
             "空白やコロンの使い分けにご注意ください"
         )
-    # 潮位ガイド
-    elif user_text.lower() == "tide info-specific":
-        reply_text = (
-            "観測場所は種崎海水浴場で、気象庁から提供されているデータを元に潮位をお知らせします。\n\n"
-            "20yy/mm/dd hh:mm\n\n"
-            "yyには年, mmには月, ddには日を入れてください。\n"
-            "また、hh:mmには時間を入力してください（10分間隔で指定）。\n"
-            "例: 2025/05/26 07:00"
-        )
-    # 潮位指定の日時とみなして処理
-    elif re.match(r'\d{4}[/-]\d{1,2}[/-]\d{1,2}\s+\d{1,2}:\d{2}', user_text):
-        dt = parse_datetime(user_text)
-        if dt:
-            reply_text = get_tide_height_at(dt)
-        else:
-            reply_text = "日時の形式が正しくありません。例に沿って入力してください（例: 2025/05/26 07:00）"
-    # IDTの計算処理
+    elif user_text.lower().startswith("make "):
+        try:
+            _, name, weight = user_text.split()
+            weight = float(weight)
+            reply_text = write_weight_record(name, weight)
+        except ValueError:
+            reply_text = "形式が正しくありません。\n例: make yoshiaki 60.5"
     else:
         reply_text = calculate_idt(user_text)
 
