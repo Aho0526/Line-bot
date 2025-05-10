@@ -1,5 +1,6 @@
 import os
 import re
+import base64
 from datetime import datetime
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
@@ -9,6 +10,13 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
 app = Flask(__name__)
+
+# ===== credentials.json の復元（Render用）=====
+if not os.path.exists("credentials.json"):
+    cred_data = os.environ.get("GOOGLE_CREDENTIALS")
+    if cred_data:
+        with open("credentials.json", "wb") as f:
+            f.write(base64.b64decode(cred_data))
 
 # LINE API 認証情報
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
@@ -21,7 +29,7 @@ handler = WebhookHandler(LINE_CHANNEL_SECRET)
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 credentials = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
 gc = gspread.authorize(credentials)
-sheet = gc.open("LineBot").sheet1  # スプレッドシート名を適宜変更
+sheet = gc.open("LineBot").sheet1  # シート名に応じて変更可
 
 @app.route("/", methods=['POST'])
 def callback():
