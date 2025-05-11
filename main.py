@@ -23,6 +23,10 @@ scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/au
 
 # 環境変数から認証情報を取得
 google_credentials_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
+
+# Google credentialsが読み込まれているか確認
+print("GOOGLE_CREDENTIALS_JSON:", google_credentials_json)
+
 if google_credentials_json:
     credentials_info = json.loads(google_credentials_json)
     credentials = ServiceAccountCredentials.from_json_keyfile_dict(credentials_info, scope)
