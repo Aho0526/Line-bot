@@ -1,6 +1,5 @@
 import os
 import re
-import base64
 from datetime import datetime
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
@@ -11,22 +10,18 @@ from oauth2client.service_account import ServiceAccountCredentials
 
 app = Flask(__name__)
 
-if not os.path.exists("credentials.json"):
-    cred_data = os.environ.get("GOOGLE_CREDENTIALS")
-    if cred_data:
-        with open("credentials.json", "wb") as f:
-            f.write(base64.b64decode(cred_data))
-
+# LINE API 認証情報
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
+# Google Sheets API 認証情報
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 credentials = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
-client = gspread.authorize(credentials)
-sheet = client.open("LineBot").sheet1
+gc = gspread.authorize(credentials)
+sheet = gc.open("LineBot").sheet1  # スプレッドシート名を適宜変更
 
 @app.route("/", methods=['POST'])
 def callback():
@@ -71,6 +66,19 @@ def write_weight_record(name, weight):
     except Exception as e:
         return f"記録に失敗しました: {str(e)}"
 
+# Google Sheets API 認証情報の確認（動作テスト）
+def test_google_sheets():
+    try:
+        # データの書き込み確認
+        sheet.append_row(["テストデータ", "2025-05-11", "テスト"])
+
+        # データの読み込み確認
+        data = sheet.get_all_records()
+        print(data)  # 取得したデータを表示
+
+    except Exception as e:
+        print(f"Google Sheets APIエラー: {str(e)}")
+
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     user_text = event.message.text.strip()
@@ -106,3 +114,7 @@ def handle_message(event):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
+    # Google Sheets API 動作確認をここで呼び出し
+    test_google_sheets()
+
