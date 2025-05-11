@@ -20,10 +20,17 @@ handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
 # Google Sheets API 認証情報（環境変数から読み込み）
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-credentials_info = json.loads(os.getenv("GOOGLE_CREDENTIALS_JSON"))
-credentials = ServiceAccountCredentials.from_json_keyfile_dict(credentials_info, scope)
-gc = gspread.authorize(credentials)
-sheet = gc.open("LineBot").sheet1  # スプレッドシート名を適宜変更
+
+# 環境変数から認証情報を取得
+google_credentials_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
+if google_credentials_json:
+    credentials_info = json.loads(google_credentials_json)
+    credentials = ServiceAccountCredentials.from_json_keyfile_dict(credentials_info, scope)
+    gc = gspread.authorize(credentials)
+    sheet = gc.open("LineBot").sheet1  # スプレッドシート名を適宜変更
+else:
+    print("Google credentials are missing.")
+    sheet = None
 
 @app.route("/", methods=['POST'])
 def callback():
@@ -62,22 +69,27 @@ def calculate_idt(message_text):
 
 def write_weight_record(name, weight):
     try:
-        now = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
-        sheet.append_row([name, weight, now])
-        return "記録しました。"
+        if sheet is not None:
+            now = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
+            sheet.append_row([name, weight, now])
+            return "記録しました。"
+        else:
+            return "Google Sheetsの接続に失敗しました。"
     except Exception as e:
         return f"記録に失敗しました: {str(e)}"
 
 # Google Sheets API 認証情報の確認（動作テスト）
 def test_google_sheets():
     try:
-        # データの書き込み確認
-        sheet.append_row(["テストデータ", "2025-05-11", "テスト"])
+        if sheet is not None:
+            # データの書き込み確認
+            sheet.append_row(["テストデータ", "2025-05-11", "テスト"])
 
-        # データの読み込み確認
-        data = sheet.get_all_records()
-        print(data)  # 取得したデータを表示
-
+            # データの読み込み確認
+            data = sheet.get_all_records()
+            print(data)  # 取得したデータを表示
+        else:
+            print("Google Sheetsの接続に失敗しました。")
     except Exception as e:
         print(f"Google Sheets APIエラー: {str(e)}")
 
@@ -119,4 +131,3 @@ if __name__ == "__main__":
 
     # Google Sheets API 動作確認をここで呼び出し
     test_google_sheets()
-
