@@ -1,5 +1,6 @@
 import os
 import re
+import json
 from datetime import datetime
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
@@ -17,9 +18,10 @@ LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
-# Google Sheets API 認証情報
+# Google Sheets API 認証情報（環境変数から読み込み）
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-credentials = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+credentials_info = json.loads(os.getenv("GOOGLE_CREDENTIALS_JSON"))
+credentials = ServiceAccountCredentials.from_json_keyfile_dict(credentials_info, scope)
 gc = gspread.authorize(credentials)
 sheet = gc.open("LineBot").sheet1  # スプレッドシート名を適宜変更
 
