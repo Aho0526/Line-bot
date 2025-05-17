@@ -10,13 +10,15 @@ scopes = ["https://www.googleapis.com/auth/spreadsheets"]
 credentials = Credentials.from_service_account_info(credentials_info, scopes=scopes)
 gc = gspread.authorize(credentials)
 
-# スプレッドシートに接続
-SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1wZR1Tdupldp0RVOm00QAbE9-muz47unt_WhxagdirFA/edit"
-spreadsheet = gc.open_by_url(SPREADSHEET_URL)
+# users用スプレッドシートに接続
+USERS_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1wZR1Tdupldp0RVOm00QAbE9-muz47unt_WhxagdirFA/edit"
+users_spreadsheet = gc.open_by_url(USERS_SPREADSHEET_URL)
+users_ws = users_spreadsheet.worksheet("users")  # 認証情報シート
 
-# 各ワークシートへの参照
-users_ws = spreadsheet.worksheet("users")     # 認証情報
-data_ws = spreadsheet.worksheet("データ")     # 記録データなど
+# database用スプレッドシートに接続
+DATABASE_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/11ZlpV2yl9aA3gxpS-JhBxgNniaxlDP1NO_4XmpGvg54/edit"
+database_spreadsheet = gc.open_by_url(DATABASE_SPREADSHEET_URL)
+data_ws = database_spreadsheet.worksheet("database")  # 記録データシート
 
 # 指定ユーザーの認証チェック
 def check_credentials(name, key):
