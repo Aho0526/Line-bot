@@ -40,3 +40,8 @@ def get_last_login_time(name):
     if cell:
         return users_ws.cell(cell.row, 3).value
     return None
+
+def get_user_key_map():
+    records = users_ws.get_all_records()
+    return {row['name']: row['key'] for row in records}
+
