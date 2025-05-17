@@ -23,7 +23,7 @@ credentials_json = os.getenv('GOOGLE_CREDENTIALS_JSON')
 credentials = ServiceAccountCredentials.from_json_keyfile_dict(eval(credentials_json), scope)
 gc = gspread.authorize(credentials)
 spreadsheet = gc.open('users')
-users_ws = spreadsheet.worksheet('シート1')
+users_ws = spreadsheet.worksheet('users')
 
 # --- ユーザー認証状態管理 ---
 user_states = {}  # { user_id: {'status': 'idle'/'auth_waiting'/'logged_in', 'try_count': int, 'last_auth_time': float, 'name': str, 'key': str} }
