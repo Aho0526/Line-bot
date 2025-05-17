@@ -3,6 +3,7 @@ import json
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
+from datetime import datetime
 
 # 環境変数から認証情報を読み込み
 credentials_info = json.loads(os.environ["GOOGLE_CREDENTIALS_JSON"])
@@ -44,4 +45,15 @@ def get_last_login_time(name):
 def get_user_key_map():
     records = users_ws.get_all_records()
     return {row['name']: row['key'] for row in records}
+
+
+def update_last_auth(name):
+    try:
+        cell = users_ws.find(name)
+        if cell:
+            # 例: 3列目に最終認証日時をISOフォーマットで記録
+            users_ws.update_cell(cell.row, 3, datetime.now().isoformat())
+    except Exception as e:
+        print(f"Failed to update last auth for {name}: {e}")
+
 
