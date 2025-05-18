@@ -1,5 +1,6 @@
 import os
 import time
+from datetime import datetime
 from auth_state import start_auth, reset_auth, increment_attempts, get_state
 from sheet_handler import get_user_key_map, update_last_auth
 from flask import Flask, request, abort
@@ -139,6 +140,36 @@ def handle_message(event):
 
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+# --- 毎年5月1日の学年更新と卒業者削除 ---
+def update_grades_and_cleanup():
+    try:
+        today = datetime.today()
+        if today.month == 5 and today.day == 1:
+            records = users_ws.get_all_records()
+            headers = users_ws.row_values(1)
+            updated_records = []
+            for rec in records:
+                try:
+                    grade = int(rec.get('grade', 0))
+                except ValueError:
+                    continue
+                if grade >= 4:
+                    continue  # 卒業対象（削除）
+                rec['grade'] = grade + 1
+                updated_records.append(rec)
 
+            users_ws.clear()
+            users_ws.append_row(headers)
+            for rec in updated_records:
+                row = [rec.get(h, "") for h in headers]
+                users_ws.append_row(row)
+
+            print("🎓 学年更新と卒業生削除が完了しました")
+        else:
+            print("🗓 本日は5月1日ではありません。学年更新はスキップされました。")
+    except Exception as e:
+        print(f"⚠️ 学年更新処理中にエラーが発生しました: {e}")
+
+if __name__ == "__main__":
+    update_grades_and_cleanup()
+    app.run(host="0.0.0.0", port=5000)
