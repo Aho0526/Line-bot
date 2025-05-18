@@ -1,6 +1,8 @@
 import os
 import time
 from datetime import datetime
+from auth_state import start_auth, reset_auth, increment_attempts, get_state
+from sheet_handler import get_user_key_map, update_last_auth
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
@@ -25,7 +27,7 @@ spreadsheet = gc.open('users')
 users_ws = spreadsheet.worksheet('users')
 
 # --- ユーザー認証状態管理 ---
-user_states = {}  # { user_id: {'status': 'idle'/'awaiting_credentials'/'logged_in', 'attempts': int, 'last_auth_time': float, 'name': str, 'key': str} }
+user_states = {}  # { user_id: {'status': 'idle'/'awaiting_credentials'/'logged_in', 'attempts': int, 'last_auth_time': float, 'name': str, 'key': str, 'grade': int} }
 AUTH_TIMEOUT = 600  # 10分(秒)
 
 def is_logged_in(user_id):
@@ -39,34 +41,16 @@ def is_logged_in(user_id):
         return False
     return True
 
-def start_auth(user_id):
-    user_states[user_id] = {'status': 'awaiting_credentials', 'attempts': 0}
-def reset_auth(user_id):
-    user_states[user_id] = {'status': 'idle', 'attempts': 0}
-def increment_attempts(user_id):
-    if user_id in user_states:
-        user_states[user_id]['attempts'] += 1
-def get_state(user_id):
-    return user_states.get(user_id)
-
-def get_user_key_map():
-    # Google Sheetsからnameとkeyの辞書を作成
+def check_user_credentials(name, key):
     try:
         records = users_ws.get_all_records()
-        return {rec['name']: rec['key'] for rec in records}
+        for rec in records:
+            if rec['name'] == name and rec['key'] == key:
+                return True
+        return False
     except Exception as e:
         print(f"Error accessing Google Sheets: {e}")
-        return {}
-
-def update_last_auth(name):
-    try:
-        cell = users_ws.find(name)
-        if cell:
-            row = cell.row
-            col = users_ws.find('last_auth').col
-            users_ws.update_cell(row, col, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-    except Exception as e:
-        print(f"Error updating last_auth: {e}")
+        return False
 
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -82,34 +66,43 @@ def callback():
 def handle_message(event):
     user_id = event.source.user_id
     text = event.message.text.strip()
-    state = get_state(user_id)
+    state = user_states.get(user_id, {'status': 'idle', 'attempts': 0})
 
     # --- 認証関連処理 ---
     if text.lower() == "login":
-        start_auth(user_id)
-        reply_text = "ログインを開始します。名前とキーを「名前 キー」の形式で入力してください。"
+        user_states[user_id] = {'status': 'awaiting_credentials', 'attempts': 0}
+        reply_text = "ログインを開始します。名前、キー、学年を「名前 キー 学年」の形式で入力してください。"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
         return
 
-    if state and state["status"] == "awaiting_credentials":
+    if state["status"] == "awaiting_credentials":
         increment_attempts(user_id)
-        try:
-            name, key = text.split()
-        except ValueError:
-            reply_text = "形式が正しくありません。「名前 キー」の形式で入力してください。"
+        parts = text.split()
+        if len(parts) != 3:
+            reply_text = "形式が正しくありません。「名前 キー 学年」の形式で入力してください。"
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
             return
+        name, key, grade_str = parts
+        if not grade_str.isdigit():
+            reply_text = "学年は数字で入力してください。"
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
+            return
+        grade = int(grade_str)
 
         user_key_map = get_user_key_map()
         if name in user_key_map and user_key_map[name] == key:
-            update_last_auth(name)
+            try:
+                update_last_auth(name)
+            except Exception as e:
+                print(f"Warning: update_last_auth failed: {e}")
             reset_auth(user_id)
             user_states[user_id] = {
                 'status': 'logged_in',
                 'attempts': 0,
                 'last_auth_time': time.time(),
                 'name': name,
-                'key': key
+                'key': key,
+                'grade': grade
             }
             reply_text = f"認証に成功しました。{name}さん、ようこそ！"
         else:
