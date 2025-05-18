@@ -1,8 +1,6 @@
 import os
 import time
 from datetime import datetime
-from auth_state import start_auth, reset_auth, increment_attempts, get_state
-from sheet_handler import get_user_key_map, update_last_auth
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
@@ -27,7 +25,7 @@ spreadsheet = gc.open('users')
 users_ws = spreadsheet.worksheet('users')
 
 # --- ユーザー認証状態管理 ---
-user_states = {}  # { user_id: {'status': 'idle'/'auth_waiting'/'logged_in', 'try_count': int, 'last_auth_time': float, 'name': str, 'key': str} }
+user_states = {}  # { user_id: {'status': 'idle'/'awaiting_credentials'/'logged_in', 'attempts': int, 'last_auth_time': float, 'name': str, 'key': str} }
 AUTH_TIMEOUT = 600  # 10分(秒)
 
 def is_logged_in(user_id):
@@ -37,20 +35,38 @@ def is_logged_in(user_id):
     if state.get('status') != 'logged_in':
         return False
     if time.time() - state.get('last_auth_time', 0) > AUTH_TIMEOUT:
-        user_states[user_id] = {'status': 'idle', 'try_count': 0}
+        user_states[user_id] = {'status': 'idle', 'attempts': 0}
         return False
     return True
 
-def check_user_credentials(name, key):
+def start_auth(user_id):
+    user_states[user_id] = {'status': 'awaiting_credentials', 'attempts': 0}
+def reset_auth(user_id):
+    user_states[user_id] = {'status': 'idle', 'attempts': 0}
+def increment_attempts(user_id):
+    if user_id in user_states:
+        user_states[user_id]['attempts'] += 1
+def get_state(user_id):
+    return user_states.get(user_id)
+
+def get_user_key_map():
+    # Google Sheetsからnameとkeyの辞書を作成
     try:
         records = users_ws.get_all_records()
-        for rec in records:
-            if rec['name'] == name and rec['key'] == key:
-                return True
-        return False
+        return {rec['name']: rec['key'] for rec in records}
     except Exception as e:
         print(f"Error accessing Google Sheets: {e}")
-        return False
+        return {}
+
+def update_last_auth(name):
+    try:
+        cell = users_ws.find(name)
+        if cell:
+            row = cell.row
+            col = users_ws.find('last_auth').col
+            users_ws.update_cell(row, col, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+    except Exception as e:
+        print(f"Error updating last_auth: {e}")
 
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -90,7 +106,7 @@ def handle_message(event):
             reset_auth(user_id)
             user_states[user_id] = {
                 'status': 'logged_in',
-                'try_count': 0,
+                'attempts': 0,
                 'last_auth_time': time.time(),
                 'name': name,
                 'key': key
