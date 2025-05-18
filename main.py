@@ -1,6 +1,7 @@
 import os
 import time
 from datetime import datetime
+import unicodedata
 from auth_state import start_auth, reset_auth, increment_attempts, get_state
 from sheet_handler import get_user_key_map, update_last_auth
 from flask import Flask, request, abort
@@ -27,8 +28,8 @@ spreadsheet = gc.open('users')
 users_ws = spreadsheet.worksheet('users')
 
 # --- ユーザー認証状態管理 ---
-user_states = {}
-AUTH_TIMEOUT = 600  # 10分
+user_states = {}  # { user_id: {'status': 'idle'/'awaiting_credentials'/'logged_in', 'attempts': int, 'last_auth_time': float, 'name': str, 'key': str, 'grade': int} }
+AUTH_TIMEOUT = 600  # 10分(秒)
 
 def is_logged_in(user_id):
     state = user_states.get(user_id)
@@ -68,6 +69,7 @@ def handle_message(event):
     text = event.message.text.strip()
     state = user_states.get(user_id, {'status': 'idle', 'attempts': 0})
 
+    # --- 認証関連処理 ---
     if text.lower() == "login":
         user_states[user_id] = {'status': 'awaiting_credentials', 'attempts': 0}
         reply_text = "ログインを開始します。名前、キー、学年を「名前 キー 学年」の形式で入力してください。"
@@ -83,12 +85,15 @@ def handle_message(event):
             return
         name, key, grade_str = parts
 
-        try:
-            grade = int(grade_str)
-        except ValueError:
-            reply_text = "学年は半角数字で入力してください。"
+        # 全角数字を半角に変換
+        grade_str = unicodedata.normalize('NFKC', grade_str)
+
+        if not grade_str.isdigit():
+            reply_text = "学年は半角数字（例：1～4）で入力してください。"
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
             return
+
+        grade = int(grade_str)
 
         user_key_map = get_user_key_map()
         if name in user_key_map and user_key_map[name] == key:
@@ -116,6 +121,7 @@ def handle_message(event):
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
         return
 
+    # --- ログイン済みユーザーのみ、IDT/体重記録/ガイド対応 ---
     if is_logged_in(user_id):
         if "cal idt" in text.lower():
             reply_text = (
@@ -134,13 +140,13 @@ def handle_message(event):
             try:
                 _, name, weight = text.split()
                 weight = float(weight)
-                from idt_module import write_weight_record
+                from idt_module import write_weight_record  # 仮モジュール名
                 reply_text = write_weight_record(name, weight)
             except Exception:
                 reply_text = "形式が正しくありません。\n例: make yoshiaki 60.5"
         else:
             try:
-                from idt_module import calculate_idt
+                from idt_module import calculate_idt  # 仮モジュール名
                 reply_text = calculate_idt(text)
             except Exception:
                 reply_text = "IDTの計算に失敗しました。形式を確認してください。"
@@ -149,6 +155,7 @@ def handle_message(event):
 
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
 
+# --- 毎年5月1日の学年更新と卒業者削除 ---
 def update_grades_and_cleanup():
     try:
         today = datetime.today()
@@ -162,7 +169,7 @@ def update_grades_and_cleanup():
                 except ValueError:
                     continue
                 if grade >= 4:
-                    continue
+                    continue  # 卒業対象（削除）
                 rec['grade'] = grade + 1
                 updated_records.append(rec)
 
