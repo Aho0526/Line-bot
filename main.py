@@ -41,17 +41,6 @@ def is_logged_in(user_id):
         return False
     return True
 
-def check_user_credentials(name, key):
-    try:
-        records = users_ws.get_all_records()
-        for rec in records:
-            if rec['name'] == name and rec['key'] == key:
-                return True
-        return False
-    except Exception as e:
-        print(f"Error accessing Google Sheets: {e}")
-        return False
-
 @app.route("/callback", methods=['POST'])
 def callback():
     signature = request.headers['X-Line-Signature']
@@ -82,12 +71,20 @@ def handle_message(event):
             reply_text = "形式が正しくありません。「名前 キー 学年」の形式で入力してください。"
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
             return
+
         name, key, grade_str = parts
+
+        # 学年は半角数字かつ1〜4の範囲であるかを厳密にチェック
         if not grade_str.isdigit():
-            reply_text = "学年は数字で入力してください。"
+            reply_text = "学年は半角数字で入力してください。例: 2"
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
             return
+
         grade = int(grade_str)
+        if grade < 1 or grade > 4:
+            reply_text = "学年は1から4の数字で入力してください。"
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
+            return
 
         user_key_map = get_user_key_map()
         if name in user_key_map and user_key_map[name] == key:
@@ -95,6 +92,7 @@ def handle_message(event):
                 update_last_auth(name)
             except Exception as e:
                 print(f"Warning: update_last_auth failed: {e}")
+
             reset_auth(user_id)
             user_states[user_id] = {
                 'status': 'logged_in',
@@ -104,7 +102,7 @@ def handle_message(event):
                 'key': key,
                 'grade': grade
             }
-            reply_text = f"認証に成功しました。{name}さん、ようこそ！"
+            reply_text = f"認証に成功しました。{name}さん、ようこそ！ 学年は{grade}年生として登録されました。"
         else:
             if state["attempts"] >= 3:
                 reset_auth(user_id)
