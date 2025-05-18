@@ -27,8 +27,8 @@ spreadsheet = gc.open('users')
 users_ws = spreadsheet.worksheet('users')
 
 # --- ユーザー認証状態管理 ---
-user_states = {}  # { user_id: {'status': 'idle'/'awaiting_credentials'/'logged_in', 'attempts': int, 'last_auth_time': float, 'name': str, 'key': str, 'grade': int} }
-AUTH_TIMEOUT = 600  # 10分(秒)
+user_states = {}
+AUTH_TIMEOUT = 600  # 10分
 
 def is_logged_in(user_id):
     state = user_states.get(user_id)
@@ -40,6 +40,17 @@ def is_logged_in(user_id):
         user_states[user_id] = {'status': 'idle', 'attempts': 0}
         return False
     return True
+
+def check_user_credentials(name, key):
+    try:
+        records = users_ws.get_all_records()
+        for rec in records:
+            if rec['name'] == name and rec['key'] == key:
+                return True
+        return False
+    except Exception as e:
+        print(f"Error accessing Google Sheets: {e}")
+        return False
 
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -57,7 +68,6 @@ def handle_message(event):
     text = event.message.text.strip()
     state = user_states.get(user_id, {'status': 'idle', 'attempts': 0})
 
-    # --- 認証関連処理 ---
     if text.lower() == "login":
         user_states[user_id] = {'status': 'awaiting_credentials', 'attempts': 0}
         reply_text = "ログインを開始します。名前、キー、学年を「名前 キー 学年」の形式で入力してください。"
@@ -71,18 +81,12 @@ def handle_message(event):
             reply_text = "形式が正しくありません。「名前 キー 学年」の形式で入力してください。"
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
             return
-
         name, key, grade_str = parts
 
-        # 学年は半角数字かつ1〜4の範囲であるかを厳密にチェック
-        if not grade_str.isdigit():
-            reply_text = "学年は半角数字で入力してください。例: 2"
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
-            return
-
-        grade = int(grade_str)
-        if grade < 1 or grade > 4:
-            reply_text = "学年は1から4の数字で入力してください。"
+        try:
+            grade = int(grade_str)
+        except ValueError:
+            reply_text = "学年は半角数字で入力してください。"
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
             return
 
@@ -92,7 +96,6 @@ def handle_message(event):
                 update_last_auth(name)
             except Exception as e:
                 print(f"Warning: update_last_auth failed: {e}")
-
             reset_auth(user_id)
             user_states[user_id] = {
                 'status': 'logged_in',
@@ -102,7 +105,7 @@ def handle_message(event):
                 'key': key,
                 'grade': grade
             }
-            reply_text = f"認証に成功しました。{name}さん、ようこそ！ 学年は{grade}年生として登録されました。"
+            reply_text = f"認証に成功しました。{name}さん、ようこそ！"
         else:
             if state["attempts"] >= 3:
                 reset_auth(user_id)
@@ -113,7 +116,6 @@ def handle_message(event):
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
         return
 
-    # --- ログイン済みユーザーのみ、IDT/体重記録/ガイド対応 ---
     if is_logged_in(user_id):
         if "cal idt" in text.lower():
             reply_text = (
@@ -132,13 +134,13 @@ def handle_message(event):
             try:
                 _, name, weight = text.split()
                 weight = float(weight)
-                from idt_module import write_weight_record  # 仮モジュール名
+                from idt_module import write_weight_record
                 reply_text = write_weight_record(name, weight)
             except Exception:
                 reply_text = "形式が正しくありません。\n例: make yoshiaki 60.5"
         else:
             try:
-                from idt_module import calculate_idt  # 仮モジュール名
+                from idt_module import calculate_idt
                 reply_text = calculate_idt(text)
             except Exception:
                 reply_text = "IDTの計算に失敗しました。形式を確認してください。"
@@ -147,7 +149,6 @@ def handle_message(event):
 
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
 
-# --- 毎年5月1日の学年更新と卒業者削除 ---
 def update_grades_and_cleanup():
     try:
         today = datetime.today()
@@ -161,7 +162,7 @@ def update_grades_and_cleanup():
                 except ValueError:
                     continue
                 if grade >= 4:
-                    continue  # 卒業対象（削除）
+                    continue
                 rec['grade'] = grade + 1
                 updated_records.append(rec)
 
@@ -180,3 +181,4 @@ def update_grades_and_cleanup():
 if __name__ == "__main__":
     update_grades_and_cleanup()
     app.run(host="0.0.0.0", port=5000)
+
