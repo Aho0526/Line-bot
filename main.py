@@ -1,58 +1,34 @@
 import os
-import re
-import time
-from datetime import datetime
+import json
+import datetime
 from flask import Flask, request, abort
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
+import gspread
+from google.oauth2.service_account import Credentials
 
 app = Flask(__name__)
 
-# 環境変数の取得
-CHANNEL_SECRET = os.environ["LINE_CHANNEL_SECRET"]
-CHANNEL_ACCESS_TOKEN = os.environ["LINE_CHANNEL_ACCESS_TOKEN"]
+# 環境変数からLINEの設定を取得
+LINE_CHANNEL_ACCESS_TOKEN = os.environ["LINE_CHANNEL_ACCESS_TOKEN"]
+LINE_CHANNEL_SECRET = os.environ["LINE_CHANNEL_SECRET"]
 
-line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
-handler = WebhookHandler(CHANNEL_SECRET)
+line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
+handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
-# Google Sheets 認証
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds_dict = {
-    "type": os.environ["GS_TYPE"],
-    "project_id": os.environ["GS_PROJECT_ID"],
-    "private_key_id": os.environ["GS_PRIVATE_KEY_ID"],
-    "private_key": os.environ["GS_PRIVATE_KEY"].replace('\\n', '\n'),
-    "client_email": os.environ["GS_CLIENT_EMAIL"],
-    "client_id": os.environ["GS_CLIENT_ID"],
-    "auth_uri": os.environ["GS_AUTH_URI"],
-    "token_uri": os.environ["GS_TOKEN_URI"],
-    "auth_provider_x509_cert_url": os.environ["GS_AUTH_PROVIDER_CERT_URL"],
-    "client_x509_cert_url": os.environ["GS_CLIENT_CERT_URL"]
-}
-creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-client = gspread.authorize(creds)
+# Google認証情報を環境変数から読み込む
+credentials_json_str = os.environ.get("GOOGLE_CREDENTIALS_JSON")
+if credentials_json_str is None:
+    raise ValueError("GOOGLE_CREDENTIALS_JSON が設定されていません。")
 
-# シート接続
-SHEET_KEY = os.environ["GS_SHEET_KEY"]
-sheet = client.open_by_key(SHEET_KEY)
-users_ws = sheet.worksheet("users")
+credentials_info = json.loads(credentials_json_str)
+creds = Credentials.from_service_account_info(credentials_info)
 
-# ユーザー状態管理
-user_states = {}
-
-def get_user_record_map():
-    records = users_ws.get_all_records()
-    return {rec['name']: rec for rec in records if 'name' in rec and 'key' in rec}
-
-def update_last_auth(name):
-    records = users_ws.get_all_records()
-    for idx, rec in enumerate(records, start=2):
-        if rec['name'] == name:
-            users_ws.update_cell(idx, users_ws.find('last_auth').col, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-            return
+# スプレッドシートに接続
+gc = gspread.authorize(creds)
+spreadsheet = gc.open("user_database")  # スプレッドシート名を環境変数にしてもOK
+worksheet = spreadsheet.sheet1
 
 @app.route("/callback", methods=["POST"])
 def callback():
@@ -70,95 +46,42 @@ def callback():
 def handle_message(event):
     user_id = event.source.user_id
     text = event.message.text.strip()
-    reply_text = ""
 
-    # ステータス取得
-    state = user_states.get(user_id, {"status": "idle", "attempts": 0})
+    if text.lower().startswith("login "):
+        try:
+            _, name, grade, key = text.split(" ")
+        except ValueError:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="形式が正しくありません。\nlogin 名前 学年 キー の形式で入力してください。"))
+            return
 
-    if state["status"] == "idle":
-        if text.lower() == "login":
-            user_states[user_id] = {"status": "waiting_name", "attempts": 0}
-            reply_text = "名前を入力してください："
-        else:
-            reply_text = "コマンドが認識されませんでした。loginと入力してください。"
+        users = worksheet.get_all_values()
+        header = users[0]
+        data = users[1:]
 
-    elif state["status"] == "waiting_name":
-        user_states[user_id]["name"] = text
-        user_states[user_id]["status"] = "waiting_grade"
-        reply_text = "学年を入力してください（例：1, 2, 3）："
+        name_col = header.index("name")
+        grade_col = header.index("grade")
+        key_col = header.index("key")
+        user_id_col = header.index("user_id")
+        last_auth_col = header.index("last_auth")
 
-    elif state["status"] == "waiting_grade":
-        if text.isdigit():
-            user_states[user_id]["grade"] = int(text)
-            user_states[user_id]["status"] = "waiting_key"
-            reply_text = "認証キーを入力してください："
-        else:
-            reply_text = "学年は数字で入力してください："
-
-    elif state["status"] == "waiting_key":
-        key = text
-        name = state.get("name")
-        grade = state.get("grade")
-        user_record_map = get_user_record_map()
-        record = user_record_map.get(name)
-
-        if record and record["key"] == key:
-            try:
-                update_last_auth(name)
-                row_idx = next((i+2 for i, r in enumerate(users_ws.get_all_records()) if r.get("name") == name), None)
-                if row_idx:
-                    users_ws.update_cell(row_idx, users_ws.find("user_id").col, user_id)
-            except Exception as e:
-                print(f"update_last_auth error: {e}")
-
-            user_states[user_id] = {
-                "status": "logged_in",
-                "attempts": 0,
-                "last_auth_time": time.time(),
-                "name": name,
-                "key": key,
-                "grade": grade
-            }
-            reply_text = f"認証成功しました。{name}さん、ようこそ！"
-
-        else:
-            if name not in user_record_map:
-                try:
-                    headers = users_ws.row_values(1)
-                    new_row = [""] * len(headers)
-                    new_row[headers.index("name")] = name
-                    new_row[headers.index("grade")] = grade
-                    new_row[headers.index("key")] = key
-                    new_row[headers.index("user_id")] = user_id
-                    new_row[headers.index("last_auth")] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    users_ws.append_row(new_row)
-
-                    user_states[user_id] = {
-                        "status": "logged_in",
-                        "attempts": 0,
-                        "last_auth_time": time.time(),
-                        "name": name,
-                        "key": key,
-                        "grade": grade
-                    }
-                    reply_text = f"初回登録が完了しました！{name}さん、ようこそ！"
-                except Exception as e:
-                    print(f"初回登録失敗: {e}")
-                    reply_text = "登録中にエラーが発生しました。管理者に連絡してください。"
-            else:
-                user_states[user_id]["attempts"] += 1
-                if user_states[user_id]["attempts"] >= 3:
-                    user_states[user_id] = {"status": "idle", "attempts": 0}
-                    reply_text = "認証に3回失敗しました。最初からやり直してください。"
+        for i, row in enumerate(data, start=2):  # ヘッダーが1行目なので2行目から
+            if row[name_col] == name and row[grade_col] == grade and row[key_col] == key:
+                if row[user_id_col] == "":
+                    worksheet.update_cell(i, user_id_col + 1, user_id)
+                    worksheet.update_cell(i, last_auth_col + 1, str(datetime.datetime.now()))
+                    line_bot_api.reply_message(event.reply_token, TextSendMessage(text="認証成功！ユーザー情報を登録しました。"))
+                elif row[user_id_col] == user_id:
+                    worksheet.update_cell(i, last_auth_col + 1, str(datetime.datetime.now()))
+                    line_bot_api.reply_message(event.reply_token, TextSendMessage(text="ログイン成功！ようこそ。"))
                 else:
-                    remaining = 3 - user_states[user_id]["attempts"]
-                    reply_text = f"認証に失敗しました。残り{remaining}回です。"
+                    line_bot_api.reply_message(event.reply_token, TextSendMessage(text="別の端末から登録済みです。再認証が必要です。"))
+                return
 
-    elif state["status"] == "logged_in":
-        reply_text = f"{state.get('name')}さん、すでにログイン済みです。"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="認証失敗。名前・学年・キーを確認してください。"))
 
     else:
-        reply_text = "エラーが発生しました。最初からやり直してください。"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="ログインするには\nlogin 名前 学年 キー\nの形式で送信してください。"))
 
-    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
+if __name__ == "__main__":
+    app.run()
 
