@@ -37,6 +37,9 @@ gc = gspread.authorize(creds)
 spreadsheet = gc.open(spreadsheet_name)
 worksheet = spreadsheet.sheet1
 
+# ユーザーごとのログイン進捗管理用メモリ
+login_sessions = {}  # user_id -> {"step": "name"/"grade"/"key", "data": {}}
+
 @app.route("/callback", methods=["POST"])
 def callback():
     signature = request.headers["X-Line-Signature"]
@@ -54,75 +57,115 @@ def handle_message(event):
     user_id = event.source.user_id
     text = event.message.text.strip()
 
-    if text.lower().startswith("login "):
-        try:
-            _, name, grade, key = text.split(" ")
-        except ValueError:
+    # ログイン進行中のユーザーか判定し優先処理
+    if user_id in login_sessions:
+        session = login_sessions[user_id]
+        step = session["step"]
+
+        if step == "name":
+            session["data"]["name"] = text
+            session["step"] = "grade"
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text="形式が正しくありません。\nlogin 名前 学年 キー の形式で入力してください。")
+                TextSendMessage(text="学年を半角数字で入力してください。")
             )
             return
 
-        users = worksheet.get_all_values()
-        if not users:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="シートが空です。管理者に連絡してください。")
-            )
-            return
-
-        header = users[0]
-        data = users[1:]
-
-        # 必要な列名が存在するかチェック
-        required_columns = ["name", "grade", "key", "user_id", "last_auth"]
-        for col in required_columns:
-            if col not in header:
+        if step == "grade":
+            if not text.isdigit():
                 line_bot_api.reply_message(
                     event.reply_token,
-                    TextSendMessage(text=f"シートに '{col}' 列がありません。管理者に連絡してください。")
+                    TextSendMessage(text="学年は半角数字で入力してください。")
                 )
                 return
+            session["data"]["grade"] = text
+            session["step"] = "key"
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="キーを入力してください。")
+            )
+            return
 
-        name_col = header.index("name")
-        grade_col = header.index("grade")
-        key_col = header.index("key")
-        user_id_col = header.index("user_id")
-        last_auth_col = header.index("last_auth")
+        if step == "key":
+            session["data"]["key"] = text
+            # 認証処理へ
+            name = session["data"]["name"]
+            grade = session["data"]["grade"]
+            key = session["data"]["key"]
 
-        for i, row in enumerate(data, start=2):  # ヘッダーが1行目なので2行目から
-            if row[name_col] == name and row[grade_col] == grade and row[key_col] == key:
-                if row[user_id_col] == "":
-                    worksheet.update_cell(i, user_id_col + 1, user_id)
-                    worksheet.update_cell(i, last_auth_col + 1, str(datetime.datetime.now()))
-                    line_bot_api.reply_message(
-                        event.reply_token,
-                        TextSendMessage(text="認証成功！ユーザー情報を登録しました。")
-                    )
-                elif row[user_id_col] == user_id:
-                    worksheet.update_cell(i, last_auth_col + 1, str(datetime.datetime.now()))
-                    line_bot_api.reply_message(
-                        event.reply_token,
-                        TextSendMessage(text="ログイン成功！ようこそ。")
-                    )
-                else:
-                    line_bot_api.reply_message(
-                        event.reply_token,
-                        TextSendMessage(text="別の端末から登録済みです。再認証が必要です。")
-                    )
+            users = worksheet.get_all_values()
+            if not users:
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text="シートが空です。管理者に連絡してください。")
+                )
+                del login_sessions[user_id]
                 return
 
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text="認証失敗。名前・学年・キーを確認してください。")
-        )
+            header = users[0]
+            data = users[1:]
 
-    else:
+            required_columns = ["name", "grade", "key", "user_id", "last_auth"]
+            for col in required_columns:
+                if col not in header:
+                    line_bot_api.reply_message(
+                        event.reply_token,
+                        TextSendMessage(text=f"シートに '{col}' 列がありません。管理者に連絡してください。")
+                    )
+                    del login_sessions[user_id]
+                    return
+
+            name_col = header.index("name")
+            grade_col = header.index("grade")
+            key_col = header.index("key")
+            user_id_col = header.index("user_id")
+            last_auth_col = header.index("last_auth")
+
+            for i, row in enumerate(data, start=2):
+                if row[name_col] == name and row[grade_col] == grade and row[key_col] == key:
+                    if row[user_id_col] == "":
+                        worksheet.update_cell(i, user_id_col + 1, user_id)
+                        worksheet.update_cell(i, last_auth_col + 1, str(datetime.datetime.now()))
+                        line_bot_api.reply_message(
+                            event.reply_token,
+                            TextSendMessage(text="認証成功！ユーザー情報を登録しました。")
+                        )
+                    elif row[user_id_col] == user_id:
+                        worksheet.update_cell(i, last_auth_col + 1, str(datetime.datetime.now()))
+                        line_bot_api.reply_message(
+                            event.reply_token,
+                            TextSendMessage(text="ログイン成功！ようこそ。")
+                        )
+                    else:
+                        line_bot_api.reply_message(
+                            event.reply_token,
+                            TextSendMessage(text="別の端末から登録済みです。再認証が必要です。")
+                        )
+                    del login_sessions[user_id]
+                    return
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="認証失敗。名前・学年・キーを確認してください。")
+            )
+            del login_sessions[user_id]
+            return
+
+    # ログイン進行中でなければ通常処理
+    if text.lower() == "login":
+        login_sessions[user_id] = {"step": "name", "data": {}}
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(text="ログインするには\nlogin 名前 学年 キー\nの形式で送信してください。")
+            TextSendMessage(text="ログインを開始します。お名前を教えてください。")
         )
+        return
+
+    # それ以外のメッセージは案内メッセージ
+    line_bot_api.reply_message(
+        event.reply_token,
+        TextSendMessage(text="ログインするには「login」と送信してください。")
+    )
 
 if __name__ == "__main__":
     app.run()
+
