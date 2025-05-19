@@ -30,7 +30,7 @@ SCOPES = [
 creds = Credentials.from_service_account_info(credentials_info, scopes=SCOPES)
 
 # スプレッドシート名を環境変数から取得（なければ "user_database" を使う）
-spreadsheet_name = os.environ.get("SPREADSHEET_NAME", "user_database")
+spreadsheet_name = os.environ.get("SPREADSHEET_NAME", "users")
 
 # スプレッドシートに接続
 gc = gspread.authorize(creds)
