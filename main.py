@@ -1,134 +1,164 @@
 import os
+import re
 import time
-import unicodedata
 from datetime import datetime
 from flask import Flask, request, abort
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 
 app = Flask(__name__)
 
-LINE_CHANNEL_ACCESS_TOKEN = os.getenv('LINE_CHANNEL_ACCESS_TOKEN')
-LINE_CHANNEL_SECRET = os.getenv('LINE_CHANNEL_SECRET')
-line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
-handler = WebhookHandler(LINE_CHANNEL_SECRET)
+# 環境変数の取得
+CHANNEL_SECRET = os.environ["LINE_CHANNEL_SECRET"]
+CHANNEL_ACCESS_TOKEN = os.environ["LINE_CHANNEL_ACCESS_TOKEN"]
 
-scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-credentials_json = os.getenv('GOOGLE_CREDENTIALS_JSON')
-credentials = ServiceAccountCredentials.from_json_keyfile_dict(eval(credentials_json), scope)
-gc = gspread.authorize(credentials)
-spreadsheet = gc.open('users')
-users_ws = spreadsheet.worksheet('users')
+line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
+handler = WebhookHandler(CHANNEL_SECRET)
 
-user_states = {}  # { user_id: {...} }
-AUTH_TIMEOUT = 600  # 10分
+# Google Sheets 認証
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+creds_dict = {
+    "type": os.environ["GS_TYPE"],
+    "project_id": os.environ["GS_PROJECT_ID"],
+    "private_key_id": os.environ["GS_PRIVATE_KEY_ID"],
+    "private_key": os.environ["GS_PRIVATE_KEY"].replace('\\n', '\n'),
+    "client_email": os.environ["GS_CLIENT_EMAIL"],
+    "client_id": os.environ["GS_CLIENT_ID"],
+    "auth_uri": os.environ["GS_AUTH_URI"],
+    "token_uri": os.environ["GS_TOKEN_URI"],
+    "auth_provider_x509_cert_url": os.environ["GS_AUTH_PROVIDER_CERT_URL"],
+    "client_x509_cert_url": os.environ["GS_CLIENT_CERT_URL"]
+}
+creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+client = gspread.authorize(creds)
 
-def is_logged_in(user_id):
-    state = user_states.get(user_id)
-    if not state:
-        return False
-    if state.get('status') != 'logged_in':
-        return False
-    if time.time() - state.get('last_auth_time', 0) > AUTH_TIMEOUT:
-        user_states[user_id] = {'status': 'idle', 'attempts': 0}
-        return False
-    return True
+# シート接続
+SHEET_KEY = os.environ["GS_SHEET_KEY"]
+sheet = client.open_by_key(SHEET_KEY)
+users_ws = sheet.worksheet("users")
 
-def get_user_key_map():
+# ユーザー状態管理
+user_states = {}
+
+def get_user_record_map():
     records = users_ws.get_all_records()
-    return {rec['name']: rec['key'] for rec in records if 'name' in rec and 'key' in rec}
+    return {rec['name']: rec for rec in records if 'name' in rec and 'key' in rec}
 
 def update_last_auth(name):
     records = users_ws.get_all_records()
     for idx, rec in enumerate(records, start=2):
-        if rec.get('name') == name:
+        if rec['name'] == name:
             users_ws.update_cell(idx, users_ws.find('last_auth').col, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
             return
 
-@app.route("/callback", methods=['POST'])
+@app.route("/callback", methods=["POST"])
 def callback():
-    signature = request.headers['X-Line-Signature']
+    signature = request.headers["X-Line-Signature"]
     body = request.get_data(as_text=True)
+
     try:
         handler.handle(body, signature)
     except InvalidSignatureError:
         abort(400)
-    return 'OK'
+
+    return "OK"
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     user_id = event.source.user_id
     text = event.message.text.strip()
-    state = user_states.get(user_id, {'status': 'idle', 'attempts': 0})
+    reply_text = ""
 
-    if text.lower() == "login":
-        user_states[user_id] = {'status': 'awaiting_credentials', 'attempts': 0}
-        reply_text = ("ログインを開始します。\n"
-                      "名前、学年、キーを半角スペース区切りで入力してください。\n"
-                      "例）サブ 2 sub0526\n"
-                      "学年は1～4の半角数字で入力してください。")
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
-        return
+    # ステータス取得
+    state = user_states.get(user_id, {"status": "idle", "attempts": 0})
 
-    if state["status"] == "awaiting_credentials":
-        user_states[user_id]['attempts'] += 1
-        parts = text.split()
-        if len(parts) != 3:
-            reply_text = ("形式が正しくありません。\n"
-                          "名前、学年、キーを半角スペース区切りで入力してください。\n"
-                          "例）サブ 2 sub0526")
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
-            return
-        name, grade_str_raw, key = parts
+    if state["status"] == "idle":
+        if text.lower() == "login":
+            user_states[user_id] = {"status": "waiting_name", "attempts": 0}
+            reply_text = "名前を入力してください："
+        else:
+            reply_text = "コマンドが認識されませんでした。loginと入力してください。"
 
-        # 学年文字列を正規化（全角→半角など）
-        grade_str = unicodedata.normalize('NFKC', grade_str_raw)
+    elif state["status"] == "waiting_name":
+        user_states[user_id]["name"] = text
+        user_states[user_id]["status"] = "waiting_grade"
+        reply_text = "学年を入力してください（例：1, 2, 3）："
 
-        # 学年検証
-        if not grade_str.isdigit():
-            reply_text = "学年は1～4の半角数字で入力してください。"
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
-            return
-        grade = int(grade_str)
-        if grade < 1 or grade > 4:
-            reply_text = "学年は1～4の半角数字で入力してください。"
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
-            return
+    elif state["status"] == "waiting_grade":
+        if text.isdigit():
+            user_states[user_id]["grade"] = int(text)
+            user_states[user_id]["status"] = "waiting_key"
+            reply_text = "認証キーを入力してください："
+        else:
+            reply_text = "学年は数字で入力してください："
 
-        user_key_map = get_user_key_map()
-        if name in user_key_map and user_key_map[name] == key:
+    elif state["status"] == "waiting_key":
+        key = text
+        name = state.get("name")
+        grade = state.get("grade")
+        user_record_map = get_user_record_map()
+        record = user_record_map.get(name)
+
+        if record and record["key"] == key:
             try:
                 update_last_auth(name)
+                row_idx = next((i+2 for i, r in enumerate(users_ws.get_all_records()) if r.get("name") == name), None)
+                if row_idx:
+                    users_ws.update_cell(row_idx, users_ws.find("user_id").col, user_id)
             except Exception as e:
                 print(f"update_last_auth error: {e}")
+
             user_states[user_id] = {
-                'status': 'logged_in',
-                'attempts': 0,
-                'last_auth_time': time.time(),
-                'name': name,
-                'key': key,
-                'grade': grade
+                "status": "logged_in",
+                "attempts": 0,
+                "last_auth_time": time.time(),
+                "name": name,
+                "key": key,
+                "grade": grade
             }
             reply_text = f"認証成功しました。{name}さん、ようこそ！"
+
         else:
-            if state["attempts"] >= 3:
-                user_states[user_id] = {'status': 'idle', 'attempts': 0}
-                reply_text = "認証に3回失敗しました。最初からやり直してください。"
+            if name not in user_record_map:
+                try:
+                    headers = users_ws.row_values(1)
+                    new_row = [""] * len(headers)
+                    new_row[headers.index("name")] = name
+                    new_row[headers.index("grade")] = grade
+                    new_row[headers.index("key")] = key
+                    new_row[headers.index("user_id")] = user_id
+                    new_row[headers.index("last_auth")] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    users_ws.append_row(new_row)
+
+                    user_states[user_id] = {
+                        "status": "logged_in",
+                        "attempts": 0,
+                        "last_auth_time": time.time(),
+                        "name": name,
+                        "key": key,
+                        "grade": grade
+                    }
+                    reply_text = f"初回登録が完了しました！{name}さん、ようこそ！"
+                except Exception as e:
+                    print(f"初回登録失敗: {e}")
+                    reply_text = "登録中にエラーが発生しました。管理者に連絡してください。"
             else:
-                reply_text = f"認証に失敗しました。残り{3 - state['attempts']}回です。"
+                user_states[user_id]["attempts"] += 1
+                if user_states[user_id]["attempts"] >= 3:
+                    user_states[user_id] = {"status": "idle", "attempts": 0}
+                    reply_text = "認証に3回失敗しました。最初からやり直してください。"
+                else:
+                    remaining = 3 - user_states[user_id]["attempts"]
+                    reply_text = f"認証に失敗しました。残り{remaining}回です。"
 
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
-        return
+    elif state["status"] == "logged_in":
+        reply_text = f"{state.get('name')}さん、すでにログイン済みです。"
 
-    if is_logged_in(user_id):
-        reply_text = "ログイン済みの機能です。"
     else:
-        reply_text = '「login」と入力して認証を開始してください。'
+        reply_text = "エラーが発生しました。最初からやり直してください。"
 
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
