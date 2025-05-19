@@ -1,5 +1,6 @@
 import os
 import time
+import unicodedata
 from datetime import datetime
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
@@ -22,7 +23,7 @@ gc = gspread.authorize(credentials)
 spreadsheet = gc.open('users')
 users_ws = spreadsheet.worksheet('users')
 
-user_states = {}  # { user_id: {'status': 'idle'/'awaiting_credentials'/'logged_in', 'attempts': int, 'last_auth_time': float, 'name': str, 'key': str, 'grade': int} }
+user_states = {}  # { user_id: {...} }
 AUTH_TIMEOUT = 600  # 10分
 
 def is_logged_in(user_id):
@@ -81,7 +82,10 @@ def handle_message(event):
                           "例）サブ 2 sub0526")
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
             return
-        name, grade_str, key = parts
+        name, grade_str_raw, key = parts
+
+        # 学年文字列を正規化（全角→半角など）
+        grade_str = unicodedata.normalize('NFKC', grade_str_raw)
 
         # 学年検証
         if not grade_str.isdigit():
