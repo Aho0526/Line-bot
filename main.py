@@ -12,14 +12,12 @@ from google.oauth2.service_account import Credentials
 
 app = Flask(__name__)
 
-# 環境変数からLINEの設定を取得
 LINE_CHANNEL_ACCESS_TOKEN = os.environ["LINE_CHANNEL_ACCESS_TOKEN"]
 LINE_CHANNEL_SECRET = os.environ["LINE_CHANNEL_SECRET"]
 
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
-# Google認証情報を環境変数から読み込む
 credentials_json_str = os.environ.get("GOOGLE_CREDENTIALS_JSON")
 if credentials_json_str is None:
     raise ValueError("GOOGLE_CREDENTIALS_JSON が設定されていません。")
@@ -31,17 +29,17 @@ SCOPES = [
 ]
 creds = Credentials.from_service_account_info(credentials_info, scopes=SCOPES)
 
-# スプレッドシート名を環境変数から取得（なければ "user_database" を使う）
 spreadsheet_name = os.environ.get("SPREADSHEET_NAME", "user_database")
-
-# スプレッドシートに接続
 gc = gspread.authorize(creds)
 spreadsheet = gc.open(spreadsheet_name)
 worksheet = spreadsheet.sheet1
 
-# 一時的なユーザー状態を保存（メモリ上のみ。サーバ再起動で消える）
-user_states = {}  # user_id: {'mode': 'login', 'step': 1/2/3, 'login_data': {}}
-otp_store = {}    # user_id: {'otp': 6桁コード, 'requester_id': str, 'timestamp': datetime}
+IDT_RECORD_URL = "https://docs.google.com/spreadsheets/d/11ZlpV2yl9aA3gxpS-JhBxgNniaxlDP1NO_4XmpGvg54/edit"
+idt_record_sheet = gc.open_by_url(IDT_RECORD_URL).sheet1  # 1枚目タブが対象
+
+user_states = {}
+otp_store = {}
+idt_memory = {}  # user_id: 最新のIDT記録（辞書形式）
 
 def generate_otp():
     return str(random.randint(100000, 999999))
@@ -49,22 +47,35 @@ def generate_otp():
 def now_str():
     return str(datetime.datetime.now())
 
+def today_ymd():
+    now = datetime.datetime.now()
+    return now.strftime("%Y/%m/%d")
+
 def parse_idt_input(text):
     """
-    入力例: 7:32.8 56.3 m
-    mm:ss.s 体重 性別
+    入力例: 太郎 2 m 7:43.6 58.3
+    名前 学年 性別 記録 体重
     """
-    # 正規表現で抽出
-    match = re.match(r"^(\d{1,2}):([0-5]?\d)(?:\.|:)?(\d)?\s+(\d{2,3}\.\d|\d{1,2}\.\d)\s+([mw])$", text.strip(), re.I)
+    match = re.match(
+        r"^([^\s　]+)\s+(\d+)\s+([mw])\s+(\d{1,2}:[0-5]?\d(?:\.\d)?)\s+(\d{1,3}\.\d)$",
+        text.strip(), re.I)
     if not match:
         return None
-    min_str, sec_str, secd_str, weight_str, gender_str = match.groups()
+    name, grade, gender_code, time_str, weight_str = match.groups()
+    gend = 0.0 if gender_code.lower() == "m" else 1.0
+    wei = float(weight_str)
+    return name, grade, gender_code.lower(), time_str, wei, gend
+
+def parse_time_str(time_str):
+    # 7:32.8 → (7, 32, 8)
+    match = re.match(r"^(\d{1,2}):([0-5]?\d)(?:\.(\d))?$", time_str)
+    if not match:
+        return None
+    min_str, sec_str, secd_str = match.groups()
     mi = int(min_str)
     se = int(sec_str)
     sed = int(secd_str) if secd_str else 0
-    wei = float(weight_str)
-    gend = 0.0 if gender_str.lower() == "m" else 1.0
-    return mi, se, sed, wei, gend
+    return mi, se, sed
 
 def calc_idt(mi, se, sed, wei, gend):
     ergo = mi * 60.0 + se + sed * 0.1
@@ -74,23 +85,18 @@ def calc_idt(mi, se, sed, wei, gend):
     return score
 
 IDT_GUIDE = (
-    "数値入力の際は以下の通りに入力してください。\n"
-    "また、性別はm/w(男性=m/女性=w)として入力してください。\n\n"
-    "mm:ss.s xx.x m/w\n\n"
-    "記入例:タイム7:32.8、体重56.3kg、男性の場合:7:32.8 56.3 m\n"
-    "空白やコロンの使い分けにご注意ください"
+    "名前 学年 性別 記録 体重の順で入力してください。\n"
+    "例: 太郎 2 m 7:43.6 58.3"
 )
 
 @app.route("/callback", methods=["POST"])
 def callback():
     signature = request.headers["X-Line-Signature"]
     body = request.get_data(as_text=True)
-
     try:
         handler.handle(body, signature)
     except InvalidSignatureError:
         abort(400)
-
     return "OK"
 
 @handler.add(MessageEvent, message=TextMessage)
@@ -98,35 +104,180 @@ def handle_message(event):
     user_id = event.source.user_id
     text = event.message.text.strip()
 
-    # IDT計算案内モード
-    if text.lower() == "cal idt":
-        user_states[user_id] = {'mode': 'idt'}
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text=IDT_GUIDE)
-        )
-        return
-
-    # IDT計算入力受付
-    if user_id in user_states and user_states[user_id].get('mode') == 'idt':
-        result = parse_idt_input(text)
-        if not result:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="入力形式が正しくありません。案内文の通りに入力してください。\n\n" + IDT_GUIDE)
-            )
-            return
-        mi, se, sed, wei, gend = result
+    # 直近IDT算出用: mm:ss.s xx.x m/w
+    idt_calc_match = re.match(
+        r"^(\d{1,2}):([0-5]?\d)(?:\.|:)?(\d)?\s+(\d{1,3}\.\d)\s+([mw])$",
+        text, re.I)
+    if idt_calc_match:
+        mi = int(idt_calc_match.group(1))
+        se = int(idt_calc_match.group(2))
+        sed = int(idt_calc_match.group(3)) if idt_calc_match.group(3) else 0
+        wei = float(idt_calc_match.group(4))
+        gend = 0.0 if idt_calc_match.group(5).lower() == "m" else 1.0
+        gender_code = idt_calc_match.group(5).lower()
         score = calc_idt(mi, se, sed, wei, gend)
-        score = round(score, 2)
+        score_disp = round(score + 1e-8, 2)
+        idt_memory[user_id] = {
+            "mi": mi,
+            "se": se,
+            "sed": sed,
+            "wei": wei,
+            "gend": gend,
+            "gender_code": gender_code,
+            "score": score_disp,
+            "time_str": f"{mi}:{se:02d}.{sed if sed else 0}"
+        }
         sex_str = "男性" if gend == 0.0 else "女性"
         line_bot_api.reply_message(
             event.reply_token,
             TextSendMessage(
-                text=f"入力値:\nタイム: {mi}:{se:02d}.{sed if sed else 0}\n体重: {wei}kg\n性別: {sex_str}\n\nIDTスコア: {score}%"
+                text=f"あなたのIDTは{score_disp:.2f}%です。"
+            )
+        )
+        return
+
+    # cal idtコマンド案内
+    if text.lower() == "cal idt":
+        user_states[user_id] = {'mode': 'idt'}
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text="数値入力の際は以下の通りに入力してください。\nまた、性別はm/w(男性=m/女性=w)として入力してください。\n\nmm:ss.s xx.x m/w\n\n記入例:タイム7:32.8、体重56.3kg、男性の場合:7:32.8 56.3 m\n空白やコロンの使い分けにご注意ください")
+        )
+        return
+
+    # cal idt実値受付
+    if user_id in user_states and user_states[user_id].get('mode') == 'idt':
+        calc_match = re.match(
+            r"^(\d{1,2}):([0-5]?\d)(?:\.|:)?(\d)?\s+(\d{1,3}\.\d)\s+([mw])$",
+            text, re.I)
+        if not calc_match:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="入力形式が正しくありません。案内文の通りに入力してください。\n\n" + "数値入力の際は以下の通りに入力してください。\nまた、性別はm/w(男性=m/女性=w)として入力してください。\n\nmm:ss.s xx.x m/w\n\n記入例:タイム7:32.8、体重56.3kg、男性の場合:7:32.8 56.3 m\n空白やコロンの使い分けにご注意ください")
+            )
+            return
+        mi = int(calc_match.group(1))
+        se = int(calc_match.group(2))
+        sed = int(calc_match.group(3)) if calc_match.group(3) else 0
+        wei = float(calc_match.group(4))
+        gend = 0.0 if calc_match.group(5).lower() == "m" else 1.0
+        gender_code = calc_match.group(5).lower()
+        score = calc_idt(mi, se, sed, wei, gend)
+        score_disp = round(score + 1e-8, 2)
+        idt_memory[user_id] = {
+            "mi": mi,
+            "se": se,
+            "sed": sed,
+            "wei": wei,
+            "gend": gend,
+            "gender_code": gender_code,
+            "score": score_disp,
+            "time_str": f"{mi}:{se:02d}.{sed if sed else 0}"
+        }
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(
+                text=f"あなたのIDTは{score_disp:.2f}%です。"
             )
         )
         user_states.pop(user_id)
+        return
+
+    # add idtコマンド
+    if re.match(r"^add idt($|[\s　])", text, re.I):
+        # 直近IDT記録がある場合は即記録モード
+        if user_id in idt_memory:
+            user_states[user_id] = {"mode": "add_idt_memory"}
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="IDTの記録を追加します。名前 学年 性別 タイム 体重の順で入力してください。\n例: 太郎 2 m 7:43.6 58.3")
+            )
+        else:
+            user_states[user_id] = {"mode": "add_idt_direct"}
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(
+                    text="IDTの記録が直近のやり取りで行われていないようです。\n" + IDT_GUIDE
+                )
+            )
+        return
+
+    # add idt直後: 直近IDT計算あり
+    if user_id in user_states and user_states[user_id].get("mode") == "add_idt_memory":
+        result = parse_idt_input(text)
+        if not result:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="入力形式が正しくありません。\n" + IDT_GUIDE)
+            )
+            return
+        name, grade, gender_code, time_str, wei, gend = result
+        # タイムが一致しなければ再計算
+        time_tuple = parse_time_str(time_str)
+        if not time_tuple:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="タイム形式が正しくありません。7:43.6 のように入力してください。")
+            )
+            return
+        mi, se, sed = time_tuple
+        score = calc_idt(mi, se, sed, wei, gend)
+        score_disp = round(score + 1e-8, 2)
+        row = [name, grade, gender_code, time_str, wei, score_disp]
+        date_disp = today_ymd()
+        try:
+            idt_record_sheet.append_row(row, value_input_option="USER_ENTERED")
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(
+                    text=f"IDTの記録を{date_disp}の日付で登録しました。\n今回のIDTは{score_disp:.2f}%でした。"
+                )
+            )
+            user_states.pop(user_id)
+            idt_memory.pop(user_id)
+        except Exception as e:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=f"記録に失敗しました。{e}")
+            )
+        return
+
+    # add idt直後: 直近IDT計算なし
+    if user_id in user_states and user_states[user_id].get("mode") == "add_idt_direct":
+        result = parse_idt_input(text)
+        if not result:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="入力形式が正しくありません。\n" + IDT_GUIDE)
+            )
+            return
+        name, grade, gender_code, time_str, wei, gend = result
+        time_tuple = parse_time_str(time_str)
+        if not time_tuple:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="タイム形式が正しくありません。7:43.6 のように入力してください。")
+            )
+            return
+        mi, se, sed = time_tuple
+        score = calc_idt(mi, se, sed, wei, gend)
+        score_disp = round(score + 1e-8, 2)
+        row = [name, grade, gender_code, time_str, wei, score_disp]
+        date_disp = today_ymd()
+        try:
+            idt_record_sheet.append_row(row, value_input_option="USER_ENTERED")
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(
+                    text=f"IDTの記録を{date_disp}の日付で登録しました。\n今回のIDTは{score_disp:.2f}%でした。"
+                )
+            )
+            user_states.pop(user_id)
+        except Exception as e:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=f"記録に失敗しました。{e}")
+            )
         return
 
     # ログインモードに入るためのコマンド
@@ -283,7 +434,10 @@ def handle_message(event):
     # 通常のメッセージ
     line_bot_api.reply_message(
         event.reply_token,
-        TextSendMessage(text="「login」と送信するとログインモードになります。\n「cal idt」と送信するとIDTスコア計算ができます。")
+        TextSendMessage(text="「login」と送信するとログインモードになります。\n"
+                             "IDTスコア計算は 例: 7:43.6 58.3 m\n"
+                             "「cal idt」と送信するとIDTスコア計算ガイドが表示されます。\n"
+                             "「add idt」と送信するとIDT記録ができます。")
     )
 
 if __name__ == "__main__":
