@@ -56,16 +56,16 @@ def now_str():
 
 def parse_idt_input(text):
     """
-    入力例: 8:41.0 44.1
-    タイム 体重
+    入力例: 7:32.8 56.3 m
+    タイム 体重 性別
     """
     match = re.match(
-        r"^(\d{1,2}:[0-5]?\d(?:\.\d)?)\s+(\d{1,3}\.\d)$",
+        r"^(\d{1,2}:[0-5]?\d(?:\.\d)?)\s+(\d{1,3}\.\d)\s+([mwMW])$",
         text.strip(), re.I)
     if not match:
         return None
-    time_str, weight_str = match.groups()
-    return time_str, float(weight_str)
+    time_str, weight_str, gender_str = match.groups()
+    return time_str, float(weight_str), gender_str.lower()
 
 def parse_time_str(time_str):
     match = re.match(r"^(\d{1,2}):([0-5]?\d)(?:\.(\d))?$", time_str)
@@ -86,8 +86,11 @@ def calc_idt(mi, se, sed, wei, gend):
     return score
 
 IDT_GUIDE = (
-    "タイム 体重 の順で半角スペース区切りで入力してください。\n"
-    "例: 8:41.0 44.1"
+    "タイム・体重・性別を半角スペース区切りで「mm:ss.s xx.x m/w」の形式で入力してください。\n"
+    "例: 7:32.8 56.3 m\n"
+    "性別は 男性=m、女性=w です。\n"
+    "空白やコロンの使い分けにご注意ください。\n"
+    "モード終了の場合は「end」と入力してください。"
 )
 
 HELP_GUIDE = (
@@ -111,6 +114,15 @@ def handle_message(event):
     user_id = event.source.user_id
     text = event.message.text.strip()
 
+    # endコマンドでモード強制終了
+    if text.lower() == "end" and user_id in user_states:
+        user_states.pop(user_id)
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text="入力モードを終了しました。")
+        )
+        return
+
     # helpコマンド
     if text.lower() == "help":
         line_bot_api.reply_message(
@@ -128,7 +140,7 @@ def handle_message(event):
         )
         return
 
-    # cal idt用: 入力受付
+    # cal idt用: 入力受付 (mm:ss.s xx.x m/w)
     if user_id in user_states and user_states[user_id].get('mode') == 'idt':
         result = parse_idt_input(text)
         if not result:
@@ -137,26 +149,14 @@ def handle_message(event):
                 TextSendMessage(text="入力形式が正しくありません。\n" + IDT_GUIDE)
             )
             return
-        time_str, wei = result
+        time_str, wei, gstr = result
         t = parse_time_str(time_str)
         if not t:
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text="タイム形式が正しくありません。8:41.0 のように入力してください。")
+                TextSendMessage(text="タイム形式が正しくありません。7:32.8 のように入力してください。")
             )
             return
-        mi, se, sed = t
-        # 性別問い合わせ
-        user_states[user_id] = {'mode': 'idt_gender', 'mi': mi, 'se': se, 'sed': sed, 'wei': wei}
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text="性別を入力してください。（m:男性、w:女性）")
-        )
-        return
-
-    # cal idt用: 性別入力受付
-    if user_id in user_states and user_states[user_id].get('mode') == 'idt_gender':
-        gstr = text.strip().lower()
         if gstr not in ("m", "w"):
             line_bot_api.reply_message(
                 event.reply_token,
@@ -164,10 +164,7 @@ def handle_message(event):
             )
             return
         gend = 0.0 if gstr == "m" else 1.0
-        mi = user_states[user_id]['mi']
-        se = user_states[user_id]['se']
-        sed = user_states[user_id]['sed']
-        wei = user_states[user_id]['wei']
+        mi, se, sed = t
         score = calc_idt(mi, se, sed, wei, gend)
         score_disp = round(score + 1e-8, 2)
         idt_memory[user_id] = {
@@ -341,14 +338,14 @@ def handle_message(event):
             user_states[user_id] = {"mode": "add_idt_memory"}
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text="IDTの記録を追加します。タイム 体重 の順で入力してください。\n例: 8:41.0 44.1")
+                TextSendMessage(text="IDTの記録を追加します。タイム・体重・性別を半角スペース区切りで「mm:ss.s xx.x m/w」の形式で入力してください。\n例: 7:32.8 56.3 m")
             )
         else:
             user_states[user_id] = {"mode": "add_idt_direct"}
             line_bot_api.reply_message(
                 event.reply_token,
                 TextSendMessage(
-                    text="IDTの記録が直近のやり取りで行われていないようです。\nタイム 体重 の順で入力してください。\n例: 8:41.0 44.1"
+                    text="IDTの記録が直近のやり取りで行われていないようです。\nタイム・体重・性別を半角スペース区切りで「mm:ss.s xx.x m/w」の形式で入力してください。\n例: 7:32.8 56.3 m"
                 )
             )
         return
@@ -359,19 +356,25 @@ def handle_message(event):
         if not result:
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text="入力形式が正しくありません。\nタイム 体重 の順で入力してください。\n例: 8:41.0 44.1")
+                TextSendMessage(text="入力形式が正しくありません。\nタイム・体重・性別を半角スペース区切りで「mm:ss.s xx.x m/w」の形式で入力してください。\n例: 7:32.8 56.3 m")
             )
             return
-        time_str, wei = result
+        time_str, wei, gstr = result
         t = parse_time_str(time_str)
         if not t:
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text="タイム形式が正しくありません。8:41.0 のように入力してください。")
+                TextSendMessage(text="タイム形式が正しくありません。7:32.8 のように入力してください。")
             )
             return
+        if gstr not in ("m", "w"):
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="性別は m（男性） か w（女性）で入力してください。")
+            )
+            return
+        gend = 0.0 if gstr == "m" else 1.0
         mi, se, sed = t
-        gend = idt_memory[user_id]['gend']
         score = calc_idt(mi, se, sed, wei, gend)
         score_disp = round(score + 1e-8, 2)
         record_time = today_jst_ymd()
@@ -399,32 +402,17 @@ def handle_message(event):
         if not result:
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text="入力形式が正しくありません。\nタイム 体重 の順で入力してください。\n例: 8:41.0 44.1")
+                TextSendMessage(text="入力形式が正しくありません。\nタイム・体重・性別を半角スペース区切りで「mm:ss.s xx.x m/w」の形式で入力してください。\n例: 7:32.8 56.3 m")
             )
             return
-        time_str, wei = result
+        time_str, wei, gstr = result
         t = parse_time_str(time_str)
         if not t:
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text="タイム形式が正しくありません。8:41.0 のように入力してください。")
+                TextSendMessage(text="タイム形式が正しくありません。7:32.8 のように入力してください。")
             )
             return
-        mi, se, sed = t
-        # 性別問い合わせ
-        user_states[user_id] = {
-            'mode': 'add_idt_direct_gender',
-            'mi': mi, 'se': se, 'sed': sed, 'wei': wei
-        }
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text="性別を入力してください。（m:男性、w:女性）")
-        )
-        return
-
-    # add idt: 性別問い合わせ完了後
-    if user_id in user_states and user_states[user_id].get("mode") == "add_idt_direct_gender":
-        gstr = text.strip().lower()
         if gstr not in ("m", "w"):
             line_bot_api.reply_message(
                 event.reply_token,
@@ -432,10 +420,7 @@ def handle_message(event):
             )
             return
         gend = 0.0 if gstr == "m" else 1.0
-        mi = user_states[user_id]['mi']
-        se = user_states[user_id]['se']
-        sed = user_states[user_id]['sed']
-        wei = user_states[user_id]['wei']
+        mi, se, sed = t
         score = calc_idt(mi, se, sed, wei, gend)
         score_disp = round(score + 1e-8, 2)
         record_time = today_jst_ymd()
