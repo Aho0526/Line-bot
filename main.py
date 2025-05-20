@@ -2,6 +2,7 @@ import os
 import json
 import datetime
 import random
+import re
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
@@ -31,7 +32,7 @@ SCOPES = [
 creds = Credentials.from_service_account_info(credentials_info, scopes=SCOPES)
 
 # スプレッドシート名を環境変数から取得（なければ "user_database" を使う）
-spreadsheet_name = os.environ.get("SPREADSHEET_NAME", "users")
+spreadsheet_name = os.environ.get("SPREADSHEET_NAME", "user_database")
 
 # スプレッドシートに接続
 gc = gspread.authorize(creds)
@@ -47,6 +48,38 @@ def generate_otp():
 
 def now_str():
     return str(datetime.datetime.now())
+
+def parse_idt_input(text):
+    """
+    入力例: 7:32.8 56.3 m
+    mm:ss.s 体重 性別
+    """
+    # 正規表現で抽出
+    match = re.match(r"^(\d{1,2}):([0-5]?\d)(?:\.|:)?(\d)?\s+(\d{2,3}\.\d|\d{1,2}\.\d)\s+([mw])$", text.strip(), re.I)
+    if not match:
+        return None
+    min_str, sec_str, secd_str, weight_str, gender_str = match.groups()
+    mi = int(min_str)
+    se = int(sec_str)
+    sed = int(secd_str) if secd_str else 0
+    wei = float(weight_str)
+    gend = 0.0 if gender_str.lower() == "m" else 1.0
+    return mi, se, sed, wei, gend
+
+def calc_idt(mi, se, sed, wei, gend):
+    ergo = mi * 60.0 + se + sed * 0.1
+    idtm = ((101.0 - wei) * (20.9 / 23.0) + 333.07) / ergo * 100.0
+    idtw = ((100.0 - wei) * (1.40) + 357.80) / ergo * 100.0
+    score = idtm * (1.0 - gend) + idtw * gend
+    return score
+
+IDT_GUIDE = (
+    "数値入力の際は以下の通りに入力してください。\n"
+    "また、性別はm/w(男性=m/女性=w)として入力してください。\n\n"
+    "mm:ss.s xx.x m/w\n\n"
+    "記入例:タイム7:32.8、体重56.3kg、男性の場合:7:32.8 56.3 m\n"
+    "空白やコロンの使い分けにご注意ください"
+)
 
 @app.route("/callback", methods=["POST"])
 def callback():
@@ -64,6 +97,37 @@ def callback():
 def handle_message(event):
     user_id = event.source.user_id
     text = event.message.text.strip()
+
+    # IDT計算案内モード
+    if text.lower() == "cal idt":
+        user_states[user_id] = {'mode': 'idt'}
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=IDT_GUIDE)
+        )
+        return
+
+    # IDT計算入力受付
+    if user_id in user_states and user_states[user_id].get('mode') == 'idt':
+        result = parse_idt_input(text)
+        if not result:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="入力形式が正しくありません。案内文の通りに入力してください。\n\n" + IDT_GUIDE)
+            )
+            return
+        mi, se, sed, wei, gend = result
+        score = calc_idt(mi, se, sed, wei, gend)
+        score = round(score, 2)
+        sex_str = "男性" if gend == 0.0 else "女性"
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(
+                text=f"入力値:\nタイム: {mi}:{se:02d}.{sed if sed else 0}\n体重: {wei}kg\n性別: {sex_str}\n\nIDTスコア: {score}%"
+            )
+        )
+        user_states.pop(user_id)
+        return
 
     # ログインモードに入るためのコマンド
     if text.lower() == "login":
@@ -219,7 +283,7 @@ def handle_message(event):
     # 通常のメッセージ
     line_bot_api.reply_message(
         event.reply_token,
-        TextSendMessage(text="「login」と送信するとログインモードになります。")
+        TextSendMessage(text="「login」と送信するとログインモードになります。\n「cal idt」と送信するとIDTスコア計算ができます。")
     )
 
 if __name__ == "__main__":
