@@ -35,7 +35,7 @@ gc = gspread.authorize(creds)
 spreadsheet = gc.open(spreadsheet_name)
 worksheet = spreadsheet.sheet1
 
-IDT_RECORD_URL = "https://docs.google.com/spreadsheets/d/11ZlpV2yl9aA3gxpS-JhBxgNniaxlDP1NO_4XmpGvg54/edit"
+IDT_RECORD_URL = os.environ.get("IDT_RECORD_URL", "https://docs.google.com/spreadsheets/d/11ZlpV2yl9aA3gxpS-JhBxgNniaxlDP1NO_4XmpGvg54/edit")
 idt_record_sheet = gc.open_by_url(IDT_RECORD_URL).sheet1
 
 ADMIN_RECORD_URL = os.environ.get("ADMIN_RECORD_URL")
@@ -94,23 +94,18 @@ def calc_idt(mi, se, sed, wei, gend):
     score = idtm * (1.0 - gend) + idtw * gend
     return score
 
-IDT_GUIDE = (
-    "タイム・体重・性別を半角スペース区切りで「mm:ss.s xx.x m/w」の形式で入力してください。\n"
-    "例: 7:32.8 56.3 m\n"
-    "性別は 男性=m、女性=w です。\n"
-    "空白やコロンの使い分けにご注意ください。\n"
-    "モード終了の場合は「end」と入力してください。"
-)
-
-HELP_GUIDE = (
-    "“login”でログインができます(記録の記入時に必須)\n"
-    "“cal idt”でIDTの計算ができます(ログイン不要)\n"
-    "“add idt”でIDTの記録を入力できます(ログイン必須)\n"
-    "“admin request”で管理者申請\n"
-    "“admin approve <名前>”で管理者昇格承認（1番管理者のみ）\n"
-    "“admin add”で選手記録を管理者として追加\n"
-    "“stop responding to <ユーザ名> for <時間> time because you did <理由>”で一時停止"
-)
+def get_user_name_grade(user_id):
+    users = worksheet.get_all_values()
+    if not users:
+        return None, None
+    header = users[0]
+    user_id_col = header.index("user_id")
+    name_col = header.index("name")
+    grade_col = header.index("grade")
+    for row in users[1:]:
+        if row[user_id_col] == user_id:
+            return row[name_col], row[grade_col]
+    return None, None
 
 def ensure_header():
     header = worksheet.row_values(1)
@@ -171,6 +166,25 @@ def is_head_admin(user_id):
             return True
     return False
 
+def get_help_message(user_id):
+    if not is_admin(user_id):
+        return (
+            "“login”でログインができます(記録の記入時に必須)\n"
+            "“cal idt”でIDTの計算ができます(ログイン不要)\n"
+            "“add idt”でIDTの記録を入力できます(ログイン必須)\n"
+            "“admin request”で管理者申請\n"
+        )
+    else:
+        return (
+            "“login”でログインができます(記録の記入時に必須)\n"
+            "“cal idt”でIDTの計算ができます(ログイン不要)\n"
+            "“add idt”でIDTの記録を入力できます(ログイン必須)\n"
+            "“admin request”で管理者申請\n"
+            "“admin approve <名前>”で管理者昇格承認（1番管理者のみ）\n"
+            "“admin add”で選手記録を管理者として追加\n"
+            "“stop responding to <ユーザ名> for <時間> time because you did <理由>”で一時停止（1番管理者のみ）"
+        )
+
 @app.route("/callback", methods=["POST"])
 def callback():
     signature = request.headers["X-Line-Signature"]
@@ -201,9 +215,9 @@ def handle_message(event):
             )
             return
 
-    # suspendコマンド拡張
+    # suspendコマンド拡張（1番管理者のみ）
     match = re.match(r"stop responding to (.+?) for ([\d.]+) time because you did (.+)", text, re.I)
-    if match and is_admin(user_id):
+    if match and is_head_admin(user_id):
         target_name = match.group(1).strip()
         duration = float(match.group(2))
         reason = match.group(3).strip()
@@ -252,7 +266,7 @@ def handle_message(event):
     if text.lower() == "help":
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(text=HELP_GUIDE)
+            TextSendMessage(text=get_help_message(user_id))
         )
         return
 
@@ -260,7 +274,13 @@ def handle_message(event):
         user_states[user_id] = {'mode': 'idt'}
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(text=IDT_GUIDE)
+            TextSendMessage(
+                text="タイム・体重・性別を半角スペース区切りで「mm:ss.s xx.x m/w」の形式で入力してください。\n"
+                     "例: 7:32.8 56.3 m\n"
+                     "性別は 男性=m、女性=w です。\n"
+                     "空白やコロンの使い分けにご注意ください。\n"
+                     "モード終了の場合は「end」と入力してください。"
+            )
         )
         return
 
@@ -269,7 +289,7 @@ def handle_message(event):
         if not result:
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text="入力形式が正しくありません。\n" + IDT_GUIDE)
+                TextSendMessage(text="入力形式が正しくありません。\nタイム・体重・性別を半角スペース区切りで「mm:ss.s xx.x m/w」の形式で入力してください。\n例: 7:32.8 56.3 m")
             )
             return
         time_str, wei, gstr = result
@@ -436,6 +456,7 @@ def handle_message(event):
                     )
                     return
 
+    # add idtコマンド
     if re.match(r"^add idt($|[\s　])", text, re.I):
         users = worksheet.get_all_values()
         header = users[0]
@@ -464,6 +485,7 @@ def handle_message(event):
             )
         return
 
+    # add idt: 直近IDT計算あり
     if user_id in user_states and user_states[user_id].get("mode") == "add_idt_memory":
         result = parse_idt_input(text)
         if not result:
@@ -491,7 +513,16 @@ def handle_message(event):
         score = calc_idt(mi, se, sed, wei, gend)
         score_disp = round(score + 1e-8, 2)
         record_time = today_jst_ymd()
-        row = [record_time, time_str, wei, score_disp]
+        name, grade = get_user_name_grade(user_id)
+        if not name or not grade:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="ユーザー情報の取得に失敗しました。再度ログインしてください。")
+            )
+            return
+        gender_str = "m" if gend == 0.0 else "w"
+        # [name, grade, gender, record_time, time, weight, idt]
+        row = [name, grade, gender_str, record_time, time_str, wei, score_disp]
         try:
             idt_record_sheet.append_row(row, value_input_option="USER_ENTERED")
             line_bot_api.reply_message(
@@ -509,6 +540,7 @@ def handle_message(event):
             )
         return
 
+    # add idt: 直近IDT計算なし
     if user_id in user_states and user_states[user_id].get("mode") == "add_idt_direct":
         result = parse_idt_input(text)
         if not result:
@@ -536,7 +568,15 @@ def handle_message(event):
         score = calc_idt(mi, se, sed, wei, gend)
         score_disp = round(score + 1e-8, 2)
         record_time = today_jst_ymd()
-        row = [record_time, f"{mi}:{se:02d}.{sed if sed else 0}", wei, score_disp]
+        name, grade = get_user_name_grade(user_id)
+        if not name or not grade:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="ユーザー情報の取得に失敗しました。再度ログインしてください。")
+            )
+            return
+        gender_str = "m" if gend == 0.0 else "w"
+        row = [name, grade, gender_str, record_time, f"{mi}:{se:02d}.{sed if sed else 0}", wei, score_disp]
         try:
             idt_record_sheet.append_row(row, value_input_option="USER_ENTERED")
             line_bot_api.reply_message(
@@ -554,7 +594,6 @@ def handle_message(event):
         return
 
     # ---------- 管理者申請・承認制度 ----------
-
     if text.lower() == "admin request":
         user_states[user_id] = {"mode": "admin_request"}
         line_bot_api.reply_message(
