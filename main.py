@@ -38,7 +38,7 @@ worksheet = spreadsheet.sheet1
 IDT_RECORD_URL = "https://docs.google.com/spreadsheets/d/11ZlpV2yl9aA3gxpS-JhBxgNniaxlDP1NO_4XmpGvg54/edit"
 idt_record_sheet = gc.open_by_url(IDT_RECORD_URL).sheet1
 
-ADMIN_RECORD_URL = os.environ.get("ADMIN_RECORD_URL")  # 追加: 管理者用記録用スプレッドシートURL（環境変数で管理）
+ADMIN_RECORD_URL = os.environ.get("ADMIN_RECORD_URL")
 if ADMIN_RECORD_URL:
     admin_record_sheet = gc.open_by_url(ADMIN_RECORD_URL).sheet1
 else:
@@ -51,7 +51,6 @@ idt_memory = {}
 # 停止ユーザー情報
 suspended_users = set()
 
-# 日本時間で日付取得
 def today_jst_ymd():
     jst = pytz.timezone('Asia/Tokyo')
     now = datetime.datetime.now(jst)
@@ -64,10 +63,6 @@ def now_str():
     return str(datetime.datetime.now())
 
 def parse_idt_input(text):
-    """
-    入力例: 7:32.8 56.3 m
-    タイム 体重 性別
-    """
     match = re.match(
         r"^(\d{1,2}:[0-5]?\d(?:\.\d)?)\s+(\d{1,3}\.\d)\s+([mwMW])$",
         text.strip(), re.I)
@@ -87,7 +82,6 @@ def parse_time_str(time_str):
     return mi, se, sed
 
 def calc_idt(mi, se, sed, wei, gend):
-    # gend: 0.0=男, 1.0=女
     ergo = mi * 60.0 + se + sed * 0.1
     idtm = ((101.0 - wei) * (20.9 / 23.0) + 333.07) / ergo * 100.0
     idtw = ((100.0 - wei) * (1.40) + 357.80) / ergo * 100.0
@@ -111,9 +105,7 @@ HELP_GUIDE = (
     "“suspend <ユーザー名>”でアカウント一時停止（管理者専用）"
 )
 
-# 管理者判定用
 def is_admin(user_id):
-    """user_idが管理者か判定する"""
     users = worksheet.get_all_values()
     if not users:
         return False
@@ -127,7 +119,6 @@ def is_admin(user_id):
             return True
     return False
 
-# 管理者を10人制限 (管理者追加コマンド用)
 def admin_count():
     users = worksheet.get_all_values()
     if not users:
@@ -141,6 +132,21 @@ def admin_count():
         if len(row) > admin_col and row[admin_col] == "1":
             count += 1
     return count
+
+def ensure_header():
+    # 必要なカラムがなければ追加
+    header = worksheet.row_values(1)
+    required = ["name", "grade", "key", "user_id", "last_auth"]
+    updated = False
+    for col in required:
+        if col not in header:
+            worksheet.update_cell(1, len(header) + 1, col)
+            header.append(col)
+            updated = True
+    if "admin" not in header:
+        worksheet.update_cell(1, len(header) + 1, "admin")
+        updated = True
+    return worksheet.row_values(1)
 
 @app.route("/callback", methods=["POST"])
 def callback():
@@ -157,7 +163,6 @@ def handle_message(event):
     user_id = event.source.user_id
     text = event.message.text.strip()
 
-    # サスペンド中なら何もできない
     if user_id in suspended_users:
         line_bot_api.reply_message(
             event.reply_token,
@@ -165,7 +170,6 @@ def handle_message(event):
         )
         return
 
-    # endコマンドでモード強制終了
     if text.lower() == "end" and user_id in user_states:
         user_states.pop(user_id)
         line_bot_api.reply_message(
@@ -174,7 +178,6 @@ def handle_message(event):
         )
         return
 
-    # helpコマンド
     if text.lower() == "help":
         line_bot_api.reply_message(
             event.reply_token,
@@ -182,7 +185,6 @@ def handle_message(event):
         )
         return
 
-    # cal idtコマンド案内
     if text.lower() == "cal idt":
         user_states[user_id] = {'mode': 'idt'}
         line_bot_api.reply_message(
@@ -191,7 +193,6 @@ def handle_message(event):
         )
         return
 
-    # cal idt用: 入力受付 (mm:ss.s xx.x m/w)
     if user_id in user_states and user_states[user_id].get('mode') == 'idt':
         result = parse_idt_input(text)
         if not result:
@@ -231,7 +232,7 @@ def handle_message(event):
         user_states.pop(user_id)
         return
 
-    # loginコマンド
+    # login（新規行追加にも対応）
     if text.lower() == "login":
         user_states[user_id] = {'mode': 'login', 'step': 1, 'login_data': {}}
         line_bot_api.reply_message(
@@ -242,7 +243,6 @@ def handle_message(event):
         )
         return
 
-    # ログインモードの処理
     if user_id in user_states and user_states[user_id].get('mode') == 'login':
         parts = text.split(" ")
         if len(parts) != 3:
@@ -253,40 +253,22 @@ def handle_message(event):
             return
 
         name, grade, key = parts
+        # headerのチェックと補完
+        header = ensure_header()
         users = worksheet.get_all_values()
-        if not users:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="シートが空です。管理者に連絡してください。")
-            )
-            user_states.pop(user_id)
-            return
-
-        header = users[0]
-        data = users[1:]
-
-        required_columns = ["name", "grade", "key", "user_id", "last_auth"]
-        for col in required_columns:
-            if col not in header:
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text=f"シートに '{col}' 列がありません。管理者に連絡してください。")
-                )
-                user_states.pop(user_id)
-                return
-
+        data = users[1:] if len(users) > 1 else []
         name_col = header.index("name")
         grade_col = header.index("grade")
         key_col = header.index("key")
         user_id_col = header.index("user_id")
         last_auth_col = header.index("last_auth")
-        admin_col = header.index("admin") if "admin" in header else None
+        admin_col = header.index("admin")
 
         found = False
         for i, row in enumerate(data, start=2):
             if row[name_col] == name and row[grade_col] == grade and row[key_col] == key:
                 found = True
-                registered_user_id = row[user_id_col]
+                registered_user_id = row[user_id_col] if len(row) > user_id_col else ""
                 if registered_user_id == "":
                     worksheet.update_cell(i, user_id_col + 1, user_id)
                     worksheet.update_cell(i, last_auth_col + 1, now_str())
@@ -325,15 +307,29 @@ def handle_message(event):
                     user_states[user_id]["step"] = 2
                 return
 
+        # 一致する行がなければ新規行を追加
         if not found:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="認証失敗。名前・学年・キーを確認してください。")
-            )
-            user_states.pop(user_id)
-        return
+            try:
+                new_row = [""] * len(header)
+                new_row[name_col] = name
+                new_row[grade_col] = grade
+                new_row[key_col] = key
+                new_row[user_id_col] = user_id
+                new_row[last_auth_col] = now_str()
+                new_row[admin_col] = ""
+                worksheet.append_row(new_row, value_input_option="USER_ENTERED")
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text="初回登録が完了しました。ログイン成功です。")
+                )
+                user_states.pop(user_id)
+            except Exception as e:
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text=f"登録に失敗しました: {e}")
+                )
+            return
 
-    # OTP認証の流れ
     if user_id in user_states and user_states[user_id].get("step") == 2:
         input_otp = text.strip()
         for owner_id, otp_info in otp_store.items():
@@ -372,9 +368,7 @@ def handle_message(event):
                     )
                     return
 
-    # add idtコマンド
     if re.match(r"^add idt($|[\s　])", text, re.I):
-        # ログインしているか判定(worksheetにuser_idが存在するか)
         users = worksheet.get_all_values()
         header = users[0]
         data = users[1:]
@@ -402,7 +396,6 @@ def handle_message(event):
             )
         return
 
-    # add idt直後: 直近IDT計算あり
     if user_id in user_states and user_states[user_id].get("mode") == "add_idt_memory":
         result = parse_idt_input(text)
         if not result:
@@ -448,7 +441,6 @@ def handle_message(event):
             )
         return
 
-    # add idt直後: 直近IDT計算なし
     if user_id in user_states and user_states[user_id].get("mode") == "add_idt_direct":
         result = parse_idt_input(text)
         if not result:
@@ -495,7 +487,6 @@ def handle_message(event):
 
     # ---------- 管理者専用機能 ----------
 
-    # 管理者ログインコマンド
     if text.lower() == "admin login":
         user_states[user_id] = {'mode': 'admin_login'}
         line_bot_api.reply_message(
@@ -506,7 +497,6 @@ def handle_message(event):
         )
         return
 
-    # 管理者ログインモードの処理
     if user_id in user_states and user_states[user_id].get('mode') == 'admin_login':
         parts = text.split(" ")
         if len(parts) != 3:
@@ -534,7 +524,6 @@ def handle_message(event):
         user_id_col = header.index("user_id")
         admin_col = header.index("admin") if "admin" in header else None
 
-        # 既に10人管理者いたら追加不可
         if admin_col is not None and admin_count() >= 10:
             line_bot_api.reply_message(
                 event.reply_token,
@@ -547,7 +536,6 @@ def handle_message(event):
         for i, row in enumerate(data, start=2):
             if row[name_col] == name and row[grade_col] == grade and row[key_col] == key:
                 found = True
-                # admin列追加
                 if admin_col is not None:
                     worksheet.update_cell(i, admin_col + 1, "1")
                 else:
@@ -569,7 +557,6 @@ def handle_message(event):
             user_states.pop(user_id)
         return
 
-    # 管理者による記録追加(admin add)
     if text.lower() == "admin add":
         if not is_admin(user_id):
             line_bot_api.reply_message(
@@ -628,7 +615,6 @@ def handle_message(event):
         score = calc_idt(mi, se, sed, weight, gend)
         score_disp = round(score + 1e-8, 2)
         record_time = today_jst_ymd()
-        # 既存の選手として登録されているユーザーの追加は不可
         users = worksheet.get_all_values()
         header = users[0]
         name_col = header.index("name")
@@ -654,7 +640,6 @@ def handle_message(event):
             )
         return
 
-    # 管理者によるアカウント一時停止
     if text.lower().startswith("suspend "):
         if not is_admin(user_id):
             line_bot_api.reply_message(
@@ -688,11 +673,7 @@ def handle_message(event):
         )
         return
 
-    # 何も該当しなければ何も返さない
     return
-
-if __name__ == "__main__":
-    app.run()
 
 if __name__ == "__main__":
     app.run()
