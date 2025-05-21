@@ -38,9 +38,18 @@ worksheet = spreadsheet.sheet1
 IDT_RECORD_URL = "https://docs.google.com/spreadsheets/d/11ZlpV2yl9aA3gxpS-JhBxgNniaxlDP1NO_4XmpGvg54/edit"
 idt_record_sheet = gc.open_by_url(IDT_RECORD_URL).sheet1
 
+ADMIN_RECORD_URL = os.environ.get("ADMIN_RECORD_URL")  # 追加: 管理者用記録用スプレッドシートURL（環境変数で管理）
+if ADMIN_RECORD_URL:
+    admin_record_sheet = gc.open_by_url(ADMIN_RECORD_URL).sheet1
+else:
+    admin_record_sheet = None
+
 user_states = {}
 otp_store = {}
 idt_memory = {}
+
+# 停止ユーザー情報
+suspended_users = set()
 
 # 日本時間で日付取得
 def today_jst_ymd():
@@ -96,8 +105,42 @@ IDT_GUIDE = (
 HELP_GUIDE = (
     "“login”でログインができます(記録の記入時に必須)\n"
     "“cal idt”でIDTの計算ができます(ログイン不要)\n"
-    "“add idt”でIDTの記録を入力できます(ログイン必須)"
+    "“add idt”でIDTの記録を入力できます(ログイン必須)\n"
+    "“admin login”で管理者としてログイン\n"
+    "“admin add”で選手記録を管理者として追加\n"
+    "“suspend <ユーザー名>”でアカウント一時停止（管理者専用）"
 )
+
+# 管理者判定用
+def is_admin(user_id):
+    """user_idが管理者か判定する"""
+    users = worksheet.get_all_values()
+    if not users:
+        return False
+    header = users[0]
+    if "admin" not in header:
+        return False
+    user_id_col = header.index("user_id")
+    admin_col = header.index("admin")
+    for row in users[1:]:
+        if len(row) > admin_col and row[user_id_col] == user_id and row[admin_col] == "1":
+            return True
+    return False
+
+# 管理者を10人制限 (管理者追加コマンド用)
+def admin_count():
+    users = worksheet.get_all_values()
+    if not users:
+        return 0
+    header = users[0]
+    if "admin" not in header:
+        return 0
+    admin_col = header.index("admin")
+    count = 0
+    for row in users[1:]:
+        if len(row) > admin_col and row[admin_col] == "1":
+            count += 1
+    return count
 
 @app.route("/callback", methods=["POST"])
 def callback():
@@ -113,6 +156,14 @@ def callback():
 def handle_message(event):
     user_id = event.source.user_id
     text = event.message.text.strip()
+
+    # サスペンド中なら何もできない
+    if user_id in suspended_users:
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text="このアカウントは一時停止中です。管理者にお問い合わせください。")
+        )
+        return
 
     # endコマンドでモード強制終了
     if text.lower() == "end" and user_id in user_states:
@@ -229,6 +280,7 @@ def handle_message(event):
         key_col = header.index("key")
         user_id_col = header.index("user_id")
         last_auth_col = header.index("last_auth")
+        admin_col = header.index("admin") if "admin" in header else None
 
         found = False
         for i, row in enumerate(data, start=2):
@@ -441,8 +493,206 @@ def handle_message(event):
             )
         return
 
+    # ---------- 管理者専用機能 ----------
+
+    # 管理者ログインコマンド
+    if text.lower() == "admin login":
+        user_states[user_id] = {'mode': 'admin_login'}
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(
+                text="管理者としてログインするには、選手として登録済みの名前・学年・キーを入力してください。\n例: 太郎 2 tarou123"
+            )
+        )
+        return
+
+    # 管理者ログインモードの処理
+    if user_id in user_states and user_states[user_id].get('mode') == 'admin_login':
+        parts = text.split(" ")
+        if len(parts) != 3:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="形式が正しくありません。\n名前 学年 キー の順でスペース区切りで入力してください。")
+            )
+            return
+
+        name, grade, key = parts
+        users = worksheet.get_all_values()
+        if not users:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="利用者データが空です。")
+            )
+            user_states.pop(user_id)
+            return
+
+        header = users[0]
+        data = users[1:]
+        name_col = header.index("name")
+        grade_col = header.index("grade")
+        key_col = header.index("key")
+        user_id_col = header.index("user_id")
+        admin_col = header.index("admin") if "admin" in header else None
+
+        # 既に10人管理者いたら追加不可
+        if admin_col is not None and admin_count() >= 10:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="管理者の人数上限に達しています。")
+            )
+            user_states.pop(user_id)
+            return
+
+        found = False
+        for i, row in enumerate(data, start=2):
+            if row[name_col] == name and row[grade_col] == grade and row[key_col] == key:
+                found = True
+                # admin列追加
+                if admin_col is not None:
+                    worksheet.update_cell(i, admin_col + 1, "1")
+                else:
+                    worksheet.add_cols(1)
+                    worksheet.update_cell(1, len(header)+1, "admin")
+                    worksheet.update_cell(i, len(header)+1, "1")
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text="管理者権限を付与しました。")
+                )
+                user_states.pop(user_id)
+                return
+
+        if not found:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="認証失敗。名前・学年・キーを確認してください。")
+            )
+            user_states.pop(user_id)
+        return
+
+    # 管理者による記録追加(admin add)
+    if text.lower() == "admin add":
+        if not is_admin(user_id):
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="管理者権限がありません。")
+            )
+            return
+        user_states[user_id] = {'mode': 'admin_add', 'step': 1}
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(
+                text="管理者記録追加モードです。選手の「名前 性別(m/w) 結果(タイム) 体重」を半角スペース区切りで入力してください。\n例: 太郎 m 7:32.8 56.3"
+            )
+        )
+        return
+
+    if user_id in user_states and user_states[user_id].get('mode') == 'admin_add':
+        if admin_record_sheet is None:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="管理者記録用スプレッドシートが設定されていません。")
+            )
+            user_states.pop(user_id)
+            return
+        parts = text.split(" ")
+        if len(parts) != 4:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="形式が正しくありません。\n名前 性別(m/w) タイム 体重 の順でスペース区切りで入力してください。")
+            )
+            return
+        name, gender, time_str, weight = parts
+        if gender.lower() not in ("m", "w"):
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="性別は m か w で入力してください。")
+            )
+            return
+        t = parse_time_str(time_str)
+        if not t:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="タイム形式が正しくありません。例: 7:32.8")
+            )
+            return
+        try:
+            weight = float(weight)
+        except Exception:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="体重は数値で入力してください。")
+            )
+            return
+        gend = 0.0 if gender.lower() == "m" else 1.0
+        mi, se, sed = t
+        score = calc_idt(mi, se, sed, weight, gend)
+        score_disp = round(score + 1e-8, 2)
+        record_time = today_jst_ymd()
+        # 既存の選手として登録されているユーザーの追加は不可
+        users = worksheet.get_all_values()
+        header = users[0]
+        name_col = header.index("name")
+        if any(row[name_col] == name for row in users[1:]):
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="既に選手として追加済みのユーザー名です。管理者からの記録追加はできません。")
+            )
+            user_states.pop(user_id)
+            return
+        row = [record_time, name, gender, time_str, weight, score_disp]
+        try:
+            admin_record_sheet.append_row(row, value_input_option="USER_ENTERED")
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=f"管理者として{record_time}日付で記録を登録しました。\nIDT: {score_disp:.2f}%")
+            )
+            user_states.pop(user_id)
+        except Exception as e:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=f"記録に失敗しました。{e}")
+            )
+        return
+
+    # 管理者によるアカウント一時停止
+    if text.lower().startswith("suspend "):
+        if not is_admin(user_id):
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="管理者権限がありません。")
+            )
+            return
+        target_name = text[len("suspend "):].strip()
+        users = worksheet.get_all_values()
+        header = users[0]
+        name_col = header.index("name")
+        user_id_col = header.index("user_id")
+        for row in users[1:]:
+            if row[name_col] == target_name:
+                target_user_id = row[user_id_col]
+                if target_user_id:
+                    suspended_users.add(target_user_id)
+                    line_bot_api.reply_message(
+                        event.reply_token,
+                        TextSendMessage(text=f"{target_name}のアカウントを一時停止しました。")
+                    )
+                else:
+                    line_bot_api.reply_message(
+                        event.reply_token,
+                        TextSendMessage(text="ユーザーIDが未登録のため一時停止できません。")
+                    )
+                return
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text="該当するユーザーが見つかりません。")
+        )
+        return
+
     # 何も該当しなければ何も返さない
     return
+
+if __name__ == "__main__":
+    app.run()
 
 if __name__ == "__main__":
     app.run()
