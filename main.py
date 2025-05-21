@@ -48,8 +48,8 @@ user_states = {}
 otp_store = {}
 idt_memory = {}
 
-# 停止ユーザー情報
 suspended_users = set()
+admin_request_store = {}  # {user_id: {"name": ..., "grade": ..., "key": ...}}
 
 def today_jst_ymd():
     jst = pytz.timezone('Asia/Tokyo')
@@ -100,53 +100,73 @@ HELP_GUIDE = (
     "“login”でログインができます(記録の記入時に必須)\n"
     "“cal idt”でIDTの計算ができます(ログイン不要)\n"
     "“add idt”でIDTの記録を入力できます(ログイン必須)\n"
-    "“admin login”で管理者としてログイン\n"
+    "“admin request”で管理者申請\n"
+    "“admin approve <名前>”で管理者昇格承認（1番管理者のみ）\n"
     "“admin add”で選手記録を管理者として追加\n"
     "“suspend <ユーザー名>”でアカウント一時停止（管理者専用）"
 )
 
-def is_admin(user_id):
-    users = worksheet.get_all_values()
-    if not users:
-        return False
-    header = users[0]
-    if "admin" not in header:
-        return False
-    user_id_col = header.index("user_id")
-    admin_col = header.index("admin")
-    for row in users[1:]:
-        if len(row) > admin_col and row[user_id_col] == user_id and row[admin_col] == "1":
-            return True
-    return False
-
-def admin_count():
-    users = worksheet.get_all_values()
-    if not users:
-        return 0
-    header = users[0]
-    if "admin" not in header:
-        return 0
-    admin_col = header.index("admin")
-    count = 0
-    for row in users[1:]:
-        if len(row) > admin_col and row[admin_col] == "1":
-            count += 1
-    return count
-
 def ensure_header():
-    # 必要なカラムがなければ追加
     header = worksheet.row_values(1)
-    required = ["name", "grade", "key", "user_id", "last_auth"]
-    updated = False
+    required = ["name", "grade", "key", "user_id", "last_auth", "admin"]
     for col in required:
         if col not in header:
             worksheet.update_cell(1, len(header) + 1, col)
             header.append(col)
-            updated = True
-    if "admin" not in header:
-        worksheet.update_cell(1, len(header) + 1, "admin")
-        updated = True
     return worksheet.row_values(1)
+
+def get_admin_number_to_userid():
+    """admin番号→user_idのdict"""
+    users = worksheet.get_all_values()
+    header = users[0]
+    user_id_col = header.index("user_id")
+    admin_col = header.index("admin")
+    number_to_userid = {}
+    for row in users[1:]:
+        if len(row) > admin_col and row[admin_col].isdigit():
+            number_to_userid[int(row[admin_col])] = row[user_id_col]
+    return number_to_userid
+
+def get_next_admin_number():
+    """次に割り振るべきadmin番号（空き番号の最小値）"""
+    users = worksheet.get_all_values()
+    header = users[0]
+    admin_col = header.index("admin")
+    nums = {int(row[admin_col]) for row in users[1:] if row[admin_col].isdigit()}
+    n = 1
+    while n in nums:
+        n += 1
+    return n
+
+def get_user_row_by_name(name):
+    users = worksheet.get_all_values()
+    header = users[0]
+    name_col = header.index("name")
+    for i, row in enumerate(users[1:], start=2):
+        if row[name_col] == name:
+            return i, row
+    return None, None
+
+def is_admin(user_id):
+    users = worksheet.get_all_values()
+    header = users[0]
+    user_id_col = header.index("user_id")
+    admin_col = header.index("admin")
+    for row in users[1:]:
+        if row[user_id_col] == user_id and row[admin_col].isdigit():
+            return True
+    return False
+
+def is_head_admin(user_id):
+    """1番管理者判定"""
+    users = worksheet.get_all_values()
+    header = users[0]
+    user_id_col = header.index("user_id")
+    admin_col = header.index("admin")
+    for row in users[1:]:
+        if row[user_id_col] == user_id and row[admin_col] == "1":
+            return True
+    return False
 
 @app.route("/callback", methods=["POST"])
 def callback():
@@ -253,7 +273,6 @@ def handle_message(event):
             return
 
         name, grade, key = parts
-        # headerのチェックと補完
         header = ensure_header()
         users = worksheet.get_all_values()
         data = users[1:] if len(users) > 1 else []
@@ -307,7 +326,6 @@ def handle_message(event):
                     user_states[user_id]["step"] = 2
                 return
 
-        # 一致する行がなければ新規行を追加
         if not found:
             try:
                 new_row = [""] * len(header)
@@ -485,19 +503,18 @@ def handle_message(event):
             )
         return
 
-    # ---------- 管理者専用機能 ----------
+    # ---------- 管理者申請・承認制度 ----------
 
-    if text.lower() == "admin login":
-        user_states[user_id] = {'mode': 'admin_login'}
+    # 管理者申請
+    if text.lower() == "admin request":
+        user_states[user_id] = {"mode": "admin_request"}
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(
-                text="管理者としてログインするには、選手として登録済みの名前・学年・キーを入力してください。\n例: 太郎 2 tarou123"
-            )
+            TextSendMessage(text="管理者申請を受け付けます。あなたの名前・学年・キーを入力してください。\n例: 太郎 2 tarou123")
         )
         return
 
-    if user_id in user_states and user_states[user_id].get('mode') == 'admin_login':
+    if user_id in user_states and user_states[user_id].get("mode") == "admin_request":
         parts = text.split(" ")
         if len(parts) != 3:
             line_bot_api.reply_message(
@@ -505,57 +522,93 @@ def handle_message(event):
                 TextSendMessage(text="形式が正しくありません。\n名前 学年 キー の順でスペース区切りで入力してください。")
             )
             return
-
         name, grade, key = parts
+        header = ensure_header()
         users = worksheet.get_all_values()
-        if not users:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="利用者データが空です。")
-            )
-            user_states.pop(user_id)
-            return
-
-        header = users[0]
-        data = users[1:]
+        data = users[1:] if len(users) > 1 else []
         name_col = header.index("name")
         grade_col = header.index("grade")
         key_col = header.index("key")
         user_id_col = header.index("user_id")
-        admin_col = header.index("admin") if "admin" in header else None
-
-        if admin_col is not None and admin_count() >= 10:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="管理者の人数上限に達しています。")
-            )
-            user_states.pop(user_id)
-            return
+        admin_col = header.index("admin")
 
         found = False
         for i, row in enumerate(data, start=2):
             if row[name_col] == name and row[grade_col] == grade and row[key_col] == key:
                 found = True
-                if admin_col is not None:
-                    worksheet.update_cell(i, admin_col + 1, "1")
-                else:
-                    worksheet.add_cols(1)
-                    worksheet.update_cell(1, len(header)+1, "admin")
-                    worksheet.update_cell(i, len(header)+1, "1")
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text="管理者権限を付与しました。")
-                )
-                user_states.pop(user_id)
-                return
+                break
 
         if not found:
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text="認証失敗。名前・学年・キーを確認してください。")
+                TextSendMessage(text="申請失敗。あなたはユーザーとして登録されていません。")
             )
             user_states.pop(user_id)
+            return
+
+        # 申請内容をストア
+        admin_request_store[user_id] = {
+            "name": name,
+            "grade": grade,
+            "key": key
+        }
+        # 1番管理者に通知
+        number_to_userid = get_admin_number_to_userid()
+        if 1 in number_to_userid:
+            head_admin_id = number_to_userid[1]
+            line_bot_api.push_message(
+                head_admin_id,
+                TextSendMessage(
+                    text=f"{name}（学年:{grade}）が管理者申請しています。\n承認する場合は「admin approve {name}」と送信してください。"
+                )
+            )
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text="管理者申請を1番管理者へ送信しました。承認されるまでお待ちください。")
+        )
+        user_states.pop(user_id)
         return
+
+    # 1番管理者による承認
+    if text.lower().startswith("admin approve "):
+        if not is_head_admin(user_id):
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="この操作は1番管理者のみ可能です。")
+            )
+            return
+        target_name = text[len("admin approve "):].strip()
+        # 申請内容を検索
+        for request_user_id, req in admin_request_store.items():
+            if req["name"] == target_name:
+                # 対象ユーザーを探す
+                users = worksheet.get_all_values()
+                header = users[0]
+                data = users[1:]
+                name_col = header.index("name")
+                admin_col = header.index("admin")
+                for i, row in enumerate(data, start=2):
+                    if row[name_col] == target_name:
+                        next_num = get_next_admin_number()
+                        worksheet.update_cell(i, admin_col + 1, str(next_num))
+                        # 承認者・申請者に通知
+                        line_bot_api.reply_message(
+                            event.reply_token,
+                            TextSendMessage(text=f"{target_name}を管理者({next_num})に承認しました。")
+                        )
+                        line_bot_api.push_message(
+                            request_user_id,
+                            TextSendMessage(text="あなたの管理者申請が承認されました。")
+                        )
+                        admin_request_store.pop(request_user_id)
+                        return
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text="該当する申請が見つかりません。")
+        )
+        return
+
+    # 以降、既存の管理者機能（admin add・suspendなど）はis_admin(user_id)で判定
 
     if text.lower() == "admin add":
         if not is_admin(user_id):
