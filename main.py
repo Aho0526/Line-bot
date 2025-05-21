@@ -44,13 +44,17 @@ if ADMIN_RECORD_URL:
 else:
     admin_record_sheet = None
 
+SUSPEND_SHEET_NAME = os.environ.get("SUSPEND_SHEET_NAME", "suspend_list")
+try:
+    suspend_sheet = gc.open(spreadsheet_name).worksheet(SUSPEND_SHEET_NAME)
+except gspread.exceptions.WorksheetNotFound:
+    # シートがなければ作成してヘッダー追加
+    suspend_sheet = gc.open(spreadsheet_name).add_worksheet(title=SUSPEND_SHEET_NAME, rows=100, cols=4)
+    suspend_sheet.append_row(["user_id", "until", "reason"])
+
 user_states = {}
 otp_store = {}
 idt_memory = {}
-
-# 停止ユーザー情報を構造体で管理
-# suspended_users = {user_id: {"until": <解除時刻>, "reason": <理由>, "duration": <float(時間)>}}
-suspended_users = {}
 
 admin_request_store = {}
 
@@ -185,6 +189,31 @@ def get_help_message(user_id):
             "“stop responding to <ユーザ名> for <時間> time because you did <理由>”で一時停止（1番管理者のみ）"
         )
 
+def check_suspend(user_id):
+    rows = suspend_sheet.get_all_values()
+    if not rows or len(rows) < 2:
+        return False, None, None, None
+    header = rows[0]
+    if "user_id" not in header or "until" not in header or "reason" not in header:
+        return False, None, None, None
+    user_id_col = header.index("user_id")
+    until_col = header.index("until")
+    reason_col = header.index("reason")
+    now = jst_now()
+    for i, row in enumerate(rows[1:], start=2):
+        if row[user_id_col] == user_id:
+            try:
+                until_time = datetime.datetime.strptime(row[until_col], "%Y/%m/%d %H:%M").replace(tzinfo=pytz.timezone('Asia/Tokyo'))
+            except Exception:
+                continue
+            if now < until_time:
+                return (True, (until_time - now), row[reason_col], i)
+            else:
+                # 解除（行削除）
+                suspend_sheet.delete_rows(i)
+                return (False, None, None, None)
+    return (False, None, None, None)
+
 @app.route("/callback", methods=["POST"])
 def callback():
     signature = request.headers["X-Line-Signature"]
@@ -200,22 +229,18 @@ def handle_message(event):
     user_id = event.source.user_id
     text = event.message.text.strip()
 
-    # 停止解除チェック
-    if user_id in suspended_users:
-        until = suspended_users[user_id]["until"]
-        reason = suspended_users[user_id]["reason"]
-        duration = suspended_users[user_id]["duration"]
-        now = jst_now()
-        if now >= until:
-            del suspended_users[user_id]
-        else:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text=f"あなたは「{reason}」をしたので、あと{duration:.1f}時間（{int(duration*60)}分）の間Botからの応答が制限されます。")
-            )
-            return
+    # スプレッドシートによる応答停止チェック
+    is_sus, delta, reason, _ = check_suspend(user_id)
+    if is_sus:
+        mins = int(delta.total_seconds() // 60)
+        hours = delta.total_seconds() / 3600
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=f"あなたは「{reason}」をしたので、あと{hours:.1f}時間（{mins}分）の間Botからの応答が制限されます。")
+        )
+        return
 
-    # suspendコマンド拡張（1番管理者のみ）
+    # 応答停止コマンド（1番管理者のみが実行可能）
     match = re.match(r"stop responding to (.+?) for ([\d.]+) time because you did (.+)", text, re.I)
     if match and is_head_admin(user_id):
         target_name = match.group(1).strip()
@@ -231,11 +256,17 @@ def handle_message(event):
                 target_user_id = row[user_id_col]
                 if target_user_id:
                     until = jst_now() + datetime.timedelta(hours=duration)
-                    suspended_users[target_user_id] = {
-                        "until": until,
-                        "reason": reason,
-                        "duration": duration,
-                    }
+                    # 既存停止があれば上書きする
+                    rows = suspend_sheet.get_all_values()
+                    suspended = False
+                    for i, srow in enumerate(rows[1:], start=2):
+                        if srow[0] == target_user_id:
+                            suspend_sheet.update_cell(i, 2, until.strftime("%Y/%m/%d %H:%M"))
+                            suspend_sheet.update_cell(i, 3, reason)
+                            suspended = True
+                            break
+                    if not suspended:
+                        suspend_sheet.append_row([target_user_id, until.strftime("%Y/%m/%d %H:%M"), reason])
                     line_bot_api.push_message(
                         target_user_id,
                         TextSendMessage(
