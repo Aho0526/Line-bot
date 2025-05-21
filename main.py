@@ -48,13 +48,19 @@ user_states = {}
 otp_store = {}
 idt_memory = {}
 
-suspended_users = set()
-admin_request_store = {}  # {user_id: {"name": ..., "grade": ..., "key": ...}}
+# 停止ユーザー情報を構造体で管理
+# suspended_users = {user_id: {"until": <解除時刻>, "reason": <理由>, "duration": <float(時間)>}}
+suspended_users = {}
+
+admin_request_store = {}
 
 def today_jst_ymd():
     jst = pytz.timezone('Asia/Tokyo')
     now = datetime.datetime.now(jst)
     return now.strftime("%Y/%m/%d")
+
+def jst_now():
+    return datetime.datetime.now(pytz.timezone('Asia/Tokyo'))
 
 def generate_otp():
     return str(random.randint(100000, 999999))
@@ -103,7 +109,7 @@ HELP_GUIDE = (
     "“admin request”で管理者申請\n"
     "“admin approve <名前>”で管理者昇格承認（1番管理者のみ）\n"
     "“admin add”で選手記録を管理者として追加\n"
-    "“suspend <ユーザー名>”でアカウント一時停止（管理者専用）"
+    "“stop responding to <ユーザ名> for <時間> time because you did <理由>”で一時停止"
 )
 
 def ensure_header():
@@ -116,7 +122,6 @@ def ensure_header():
     return worksheet.row_values(1)
 
 def get_admin_number_to_userid():
-    """admin番号→user_idのdict"""
     users = worksheet.get_all_values()
     header = users[0]
     user_id_col = header.index("user_id")
@@ -128,7 +133,6 @@ def get_admin_number_to_userid():
     return number_to_userid
 
 def get_next_admin_number():
-    """次に割り振るべきadmin番号（空き番号の最小値）"""
     users = worksheet.get_all_values()
     header = users[0]
     admin_col = header.index("admin")
@@ -158,7 +162,6 @@ def is_admin(user_id):
     return False
 
 def is_head_admin(user_id):
-    """1番管理者判定"""
     users = worksheet.get_all_values()
     header = users[0]
     user_id_col = header.index("user_id")
@@ -183,11 +186,59 @@ def handle_message(event):
     user_id = event.source.user_id
     text = event.message.text.strip()
 
+    # 停止解除チェック
     if user_id in suspended_users:
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text="このアカウントは一時停止中です。管理者にお問い合わせください。")
-        )
+        until = suspended_users[user_id]["until"]
+        reason = suspended_users[user_id]["reason"]
+        duration = suspended_users[user_id]["duration"]
+        now = jst_now()
+        if now >= until:
+            del suspended_users[user_id]
+        else:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=f"あなたは「{reason}」をしたので、あと{duration:.1f}時間（{int(duration*60)}分）の間Botからの応答が制限されます。")
+            )
+            return
+
+    # suspendコマンド拡張
+    match = re.match(r"stop responding to (.+?) for ([\d.]+) time because you did (.+)", text, re.I)
+    if match and is_admin(user_id):
+        target_name = match.group(1).strip()
+        duration = float(match.group(2))
+        reason = match.group(3).strip()
+        users = worksheet.get_all_values()
+        header = users[0]
+        name_col = header.index("name")
+        user_id_col = header.index("user_id")
+        found = False
+        for row in users[1:]:
+            if row[name_col] == target_name:
+                target_user_id = row[user_id_col]
+                if target_user_id:
+                    until = jst_now() + datetime.timedelta(hours=duration)
+                    suspended_users[target_user_id] = {
+                        "until": until,
+                        "reason": reason,
+                        "duration": duration,
+                    }
+                    line_bot_api.push_message(
+                        target_user_id,
+                        TextSendMessage(
+                            text=f"あなたは「{reason}」をしたので、{duration:.1f}時間（{int(duration*60)}分）の間Botからの応答が制限されます。"
+                        )
+                    )
+                    line_bot_api.reply_message(
+                        event.reply_token,
+                        TextSendMessage(text=f"{target_name}を{duration:.1f}時間の間一時停止しました。理由: {reason}")
+                    )
+                    found = True
+                    break
+        if not found:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="該当するユーザーが見つかりません。")
+            )
         return
 
     if text.lower() == "end" and user_id in user_states:
@@ -252,7 +303,6 @@ def handle_message(event):
         user_states.pop(user_id)
         return
 
-    # login（新規行追加にも対応）
     if text.lower() == "login":
         user_states[user_id] = {'mode': 'login', 'step': 1, 'login_data': {}}
         line_bot_api.reply_message(
@@ -505,7 +555,6 @@ def handle_message(event):
 
     # ---------- 管理者申請・承認制度 ----------
 
-    # 管理者申請
     if text.lower() == "admin request":
         user_states[user_id] = {"mode": "admin_request"}
         line_bot_api.reply_message(
@@ -546,13 +595,11 @@ def handle_message(event):
             user_states.pop(user_id)
             return
 
-        # 申請内容をストア
         admin_request_store[user_id] = {
             "name": name,
             "grade": grade,
             "key": key
         }
-        # 1番管理者に通知
         number_to_userid = get_admin_number_to_userid()
         if 1 in number_to_userid:
             head_admin_id = number_to_userid[1]
@@ -569,7 +616,6 @@ def handle_message(event):
         user_states.pop(user_id)
         return
 
-    # 1番管理者による承認
     if text.lower().startswith("admin approve "):
         if not is_head_admin(user_id):
             line_bot_api.reply_message(
@@ -578,10 +624,8 @@ def handle_message(event):
             )
             return
         target_name = text[len("admin approve "):].strip()
-        # 申請内容を検索
         for request_user_id, req in admin_request_store.items():
             if req["name"] == target_name:
-                # 対象ユーザーを探す
                 users = worksheet.get_all_values()
                 header = users[0]
                 data = users[1:]
@@ -591,7 +635,6 @@ def handle_message(event):
                     if row[name_col] == target_name:
                         next_num = get_next_admin_number()
                         worksheet.update_cell(i, admin_col + 1, str(next_num))
-                        # 承認者・申請者に通知
                         line_bot_api.reply_message(
                             event.reply_token,
                             TextSendMessage(text=f"{target_name}を管理者({next_num})に承認しました。")
@@ -607,8 +650,6 @@ def handle_message(event):
             TextSendMessage(text="該当する申請が見つかりません。")
         )
         return
-
-    # 以降、既存の管理者機能（admin add・suspendなど）はis_admin(user_id)で判定
 
     if text.lower() == "admin add":
         if not is_admin(user_id):
@@ -691,39 +732,6 @@ def handle_message(event):
                 event.reply_token,
                 TextSendMessage(text=f"記録に失敗しました。{e}")
             )
-        return
-
-    if text.lower().startswith("suspend "):
-        if not is_admin(user_id):
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="管理者権限がありません。")
-            )
-            return
-        target_name = text[len("suspend "):].strip()
-        users = worksheet.get_all_values()
-        header = users[0]
-        name_col = header.index("name")
-        user_id_col = header.index("user_id")
-        for row in users[1:]:
-            if row[name_col] == target_name:
-                target_user_id = row[user_id_col]
-                if target_user_id:
-                    suspended_users.add(target_user_id)
-                    line_bot_api.reply_message(
-                        event.reply_token,
-                        TextSendMessage(text=f"{target_name}のアカウントを一時停止しました。")
-                    )
-                else:
-                    line_bot_api.reply_message(
-                        event.reply_token,
-                        TextSendMessage(text="ユーザーIDが未登録のため一時停止できません。")
-                    )
-                return
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text="該当するユーザーが見つかりません。")
-        )
         return
 
     return
