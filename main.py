@@ -58,6 +58,35 @@ except gspread.exceptions.WorksheetNotFound:
     admin_request_ban_sheet = gc.open(spreadsheet_name).add_worksheet(title=ADMIN_REQUEST_BAN_SHEET, rows=100, cols=3)
     admin_request_ban_sheet.append_row(["user_id", "until", "last_request_date"])
 
+def get_admin_request_ban(user_id):
+    rows = admin_request_ban_sheet.get_all_values()
+    if len(rows) < 2:
+        return None
+    header = rows[0]
+    user_id_col = header.index("user_id")
+    until_col = header.index("until")
+    for row in rows[1:]:
+        if row[user_id_col] == user_id:
+            try:
+                until_date = datetime.datetime.strptime(row[until_col], "%Y/%m/%d").replace(tzinfo=pytz.timezone('Asia/Tokyo'))
+                return until_date
+            except Exception:
+                return None
+    return None
+
+def set_admin_request_ban(user_id, days=14):
+    until = (jst_now() + datetime.timedelta(days=days)).strftime("%Y/%m/%d")
+    now_ymd = today_jst_ymd()
+    rows = admin_request_ban_sheet.get_all_values()
+    header = rows[0]
+    user_id_col = header.index("user_id")
+    for i, row in enumerate(rows[1:], start=2):
+        if row[user_id_col] == user_id:
+            admin_request_ban_sheet.update_cell(i, header.index("until")+1, until)
+            admin_request_ban_sheet.update_cell(i, header.index("last_request_date")+1, now_ymd)
+            return
+    admin_request_ban_sheet.append_row([user_id, until, now_ymd])
+
 user_states = {}
 otp_store = {}
 idt_memory = {}
@@ -146,13 +175,12 @@ def get_next_admin_number():
         n += 1
     return n
 
-def get_user_row_by_name_grade(name, grade):
+def get_user_row_by_name(name):
     users = worksheet.get_all_values()
     header = users[0]
     name_col = header.index("name")
-    grade_col = header.index("grade")
     for i, row in enumerate(users[1:], start=2):
-        if row[name_col] == name and row[grade_col] == grade:
+        if row[name_col] == name:
             return i, row
     return None, None
 
@@ -226,61 +254,6 @@ def check_suspend(user_id):
                 suspend_sheet.delete_rows(i)
                 return (False, None, None, None)
     return (False, None, None, None)
-
-def get_admin_request_ban(user_id):
-    rows = admin_request_ban_sheet.get_all_values()
-    if len(rows) < 2:
-        return None
-    header = rows[0]
-    user_id_col = header.index("user_id")
-    until_col = header.index("until")
-    for row in rows[1:]:
-        if row[user_id_col] == user_id:
-            try:
-                until_date = datetime.datetime.strptime(row[until_col], "%Y/%m/%d").replace(tzinfo=pytz.timezone('Asia/Tokyo'))
-                return until_date
-            except Exception:
-                return None
-    return None
-
-def set_admin_request_ban(user_id, days=14):
-    until = (jst_now() + datetime.timedelta(days=days)).strftime("%Y/%m/%d")
-    now_ymd = today_jst_ymd()
-    rows = admin_request_ban_sheet.get_all_values()
-    header = rows[0]
-    user_id_col = header.index("user_id")
-    for i, row in enumerate(rows[1:], start=2):
-        if row[user_id_col] == user_id:
-            admin_request_ban_sheet.update_cell(i, header.index("until")+1, until)
-            admin_request_ban_sheet.update_cell(i, header.index("last_request_date")+1, now_ymd)
-            return
-    admin_request_ban_sheet.append_row([user_id, until, now_ymd])
-
-def get_last_auth(user_id):
-    users = worksheet.get_all_values()
-    if not users or len(users) < 2:
-        return None
-    header = users[0]
-    user_id_col = header.index("user_id")
-    last_auth_col = header.index("last_auth")
-    for row in users[1:]:
-        if row[user_id_col] == user_id:
-            if len(row) > last_auth_col:
-                return row[last_auth_col]
-    return None
-
-def set_last_auth(user_id, dt=None):
-    users = worksheet.get_all_values()
-    if not users or len(users) < 2:
-        return
-    header = users[0]
-    user_id_col = header.index("user_id")
-    last_auth_col = header.index("last_auth")
-    for i, row in enumerate(users[1:], start=2):
-        if row[user_id_col] == user_id:
-            worksheet.update_cell(i, last_auth_col+1, dt if dt else now_str())
-            return
-
 @app.route("/callback", methods=["POST"])
 def callback():
     signature = request.headers["X-Line-Signature"]
@@ -296,7 +269,7 @@ def handle_message(event):
     user_id = event.source.user_id
     text = event.message.text.strip()
 
-    # suspendチェック
+    # スプレッドシートによる応答停止チェック
     is_sus, delta, reason, _ = check_suspend(user_id)
     if is_sus:
         mins = int(delta.total_seconds() // 60)
@@ -310,7 +283,7 @@ def handle_message(event):
     # 選手のみ自動ログアウト（adminは除外）
     if not is_admin(user_id):
         last_auth_str = get_last_auth(user_id)
-        if last_auth_str:
+        if last_auth_str is not None:
             try:
                 last_auth_dt = datetime.datetime.fromisoformat(last_auth_str)
             except Exception:
@@ -329,9 +302,19 @@ def handle_message(event):
                         TextSendMessage(text="10分間操作がなかったため自動ログアウトしました。再度ログインしてください。")
                     )
                     return
-        set_last_auth(user_id, now_str())
+            # last_authがNoneでなければだけ更新
+            set_last_auth(user_id, now_str())
 
-    # help
+    # 終了コマンド
+    if text.lower() == "end" and user_id in user_states:
+        user_states.pop(user_id)
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text="入力モードを終了しました。")
+        )
+        return
+
+    # helpコマンド
     if text.lower() == "help":
         line_bot_api.reply_message(
             event.reply_token,
@@ -376,15 +359,6 @@ def handle_message(event):
                 event.reply_token,
                 TextSendMessage(text="該当するユーザーが見つかりません。")
             )
-        return
-
-    # end
-    if text.lower() == "end" and user_id in user_states:
-        user_states.pop(user_id)
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text="入力モードを終了しました。")
-        )
         return
 
     # cal idt（管理者は利用不可）
@@ -447,7 +421,7 @@ def handle_message(event):
         user_states.pop(user_id)
         return
 
-    # login
+    # loginコマンド
     if text.lower() == "login":
         user_states[user_id] = {'mode': 'login', 'step': 1, 'login_data': {}}
         line_bot_api.reply_message(
@@ -582,8 +556,7 @@ def handle_message(event):
                         TextSendMessage(text="確認コードが正しくありません。再度入力してください。")
                     )
                     return
-
-    # add idt
+    # add idtコマンド
     if re.match(r"^add idt($|[\s　])", text, re.I):
         if is_admin(user_id):
             user_states[user_id] = {"mode": "add_idt_admin"}
@@ -931,7 +904,6 @@ def handle_message(event):
             )
         return
 
-    # ここまでで主要分岐は全てカバー
     return
 
 if __name__ == "__main__":
