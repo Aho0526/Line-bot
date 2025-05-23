@@ -145,6 +145,22 @@ def get_user_name_grade(user_id):
             return row[name_col], row[grade_col]
     return None, None
 
+def get_last_auth(user_id):
+    users = worksheet.get_all_values()
+    if not users or len(users) < 2:
+        return None
+    header = users[0]
+    user_id_col = header.index("user_id")
+    last_auth_col = header.index("last_auth")
+    for row in users[1:]:
+        if row[user_id_col] == user_id:
+            if len(row) > last_auth_col:
+                value = row[last_auth_col]
+                if value == "":
+                    return None
+                return value
+    return None
+
 def ensure_header():
     header = worksheet.row_values(1)
     required = ["name", "grade", "key", "user_id", "last_auth", "admin"]
