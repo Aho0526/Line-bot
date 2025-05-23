@@ -161,6 +161,18 @@ def get_last_auth(user_id):
                 return value
     return None
 
+def set_last_auth(user_id, dt=None):
+    users = worksheet.get_all_values()
+    if not users or len(users) < 2:
+        return
+    header = users[0]
+    user_id_col = header.index("user_id")
+    last_auth_col = header.index("last_auth")
+    for i, row in enumerate(users[1:], start=2):
+        if row[user_id_col] == user_id:
+            worksheet.update_cell(i, last_auth_col+1, dt if dt else now_str())
+            return
+
 def ensure_header():
     header = worksheet.row_values(1)
     required = ["name", "grade", "key", "user_id", "last_auth", "admin"]
