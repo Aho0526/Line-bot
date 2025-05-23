@@ -51,42 +51,12 @@ except gspread.exceptions.WorksheetNotFound:
     suspend_sheet = gc.open(spreadsheet_name).add_worksheet(title=SUSPEND_SHEET_NAME, rows=100, cols=4)
     suspend_sheet.append_row(["user_id", "until", "reason"])
 
-# 追加: admin request提出履歴を保存するシート名と管理関数
 ADMIN_REQUEST_BAN_SHEET = "admin_request_ban"
 try:
     admin_request_ban_sheet = gc.open(spreadsheet_name).worksheet(ADMIN_REQUEST_BAN_SHEET)
 except gspread.exceptions.WorksheetNotFound:
     admin_request_ban_sheet = gc.open(spreadsheet_name).add_worksheet(title=ADMIN_REQUEST_BAN_SHEET, rows=100, cols=3)
     admin_request_ban_sheet.append_row(["user_id", "until", "last_request_date"])
-
-def get_admin_request_ban(user_id):
-    rows = admin_request_ban_sheet.get_all_values()
-    if len(rows) < 2:
-        return None
-    header = rows[0]
-    user_id_col = header.index("user_id")
-    until_col = header.index("until")
-    for row in rows[1:]:
-        if row[user_id_col] == user_id:
-            try:
-                until_date = datetime.datetime.strptime(row[until_col], "%Y/%m/%d").replace(tzinfo=pytz.timezone('Asia/Tokyo'))
-                return until_date
-            except Exception:
-                return None
-    return None
-
-def set_admin_request_ban(user_id, days=14):
-    until = (jst_now() + datetime.timedelta(days=days)).strftime("%Y/%m/%d")
-    now_ymd = today_jst_ymd()
-    rows = admin_request_ban_sheet.get_all_values()
-    header = rows[0]
-    user_id_col = header.index("user_id")
-    for i, row in enumerate(rows[1:], start=2):
-        if row[user_id_col] == user_id:
-            admin_request_ban_sheet.update_cell(i, header.index("until")+1, until)
-            admin_request_ban_sheet.update_cell(i, header.index("last_request_date")+1, now_ymd)
-            return
-    admin_request_ban_sheet.append_row([user_id, until, now_ymd])
 
 user_states = {}
 otp_store = {}
@@ -176,12 +146,13 @@ def get_next_admin_number():
         n += 1
     return n
 
-def get_user_row_by_name(name):
+def get_user_row_by_name_grade(name, grade):
     users = worksheet.get_all_values()
     header = users[0]
     name_col = header.index("name")
+    grade_col = header.index("grade")
     for i, row in enumerate(users[1:], start=2):
-        if row[name_col] == name:
+        if row[name_col] == name and row[grade_col] == grade:
             return i, row
     return None, None
 
@@ -206,20 +177,30 @@ def is_head_admin(user_id):
     return False
 
 def get_help_message(user_id):
-    if not is_admin(user_id):
+    if is_head_admin(user_id):
         return (
-            "“login”でログインができます(記録の記入時に必須)\n"
-            "“cal idt”でIDTの計算ができます(ログイン不要)\n"
-            "“add idt”でIDTの記録を入力できます(ログイン必須)\n"
-            "“admin request”で管理者申請\n"
+            "あなたは1番管理者です。\n"
+            "“add idt”で任意の選手のIDT記録を追加できます。\n"
+            "入力形式: 名前 学年 タイム 性別(m/w)\n"
+            "例: 太郎 2 7:32.8 m\n"
+            "“admin add”で選手記録を管理者として追加（詳細機能）\n"
+            "“admin approve <名前>”で管理者昇格承認（1番管理者のみ）\n"
+            "“stop responding to <ユーザ名> for <時間> time because you did <理由>”で一時停止（1番管理者のみ）"
+        )
+    elif is_admin(user_id):
+        return (
+            "あなたは管理者（マネージャー）アカウントです。\n"
+            "“add idt”で任意の選手のIDT記録を追加できます。\n"
+            "入力形式: 名前 学年 タイム 性別(m/w)\n"
+            "例: 太郎 2 7:32.8 m\n"
+            "“admin add”で選手記録を管理者として追加（詳細機能）"
         )
     else:
         return (
-            "あなたは管理者（マネージャー）アカウントです。\n"
-            "選手記録追加や管理用コマンドのみ利用できます。\n"
-            "“admin add”で選手記録を管理者として追加\n"
-            "“admin approve <名前>”で管理者昇格承認（1番管理者のみ）\n"
-            "“stop responding to <ユーザ名> for <時間> time because you did <理由>”で一時停止（1番管理者のみ）"
+            "“login”でログインができます(記録の記入時に必須)\n"
+            "“cal idt”でIDTの計算ができます(ログイン不要)\n"
+            "“add idt”で自分のIDT記録を入力できます(ログイン必須)。例: 7:32.8 m\n"
+            "“admin request”で管理者申請\n"
         )
 
 def check_suspend(user_id):
@@ -242,10 +223,63 @@ def check_suspend(user_id):
             if now < until_time:
                 return (True, (until_time - now), row[reason_col], i)
             else:
-                # 解除（行削除）
                 suspend_sheet.delete_rows(i)
                 return (False, None, None, None)
     return (False, None, None, None)
+
+def get_admin_request_ban(user_id):
+    rows = admin_request_ban_sheet.get_all_values()
+    if len(rows) < 2:
+        return None
+    header = rows[0]
+    user_id_col = header.index("user_id")
+    until_col = header.index("until")
+    for row in rows[1:]:
+        if row[user_id_col] == user_id:
+            try:
+                until_date = datetime.datetime.strptime(row[until_col], "%Y/%m/%d").replace(tzinfo=pytz.timezone('Asia/Tokyo'))
+                return until_date
+            except Exception:
+                return None
+    return None
+
+def set_admin_request_ban(user_id, days=14):
+    until = (jst_now() + datetime.timedelta(days=days)).strftime("%Y/%m/%d")
+    now_ymd = today_jst_ymd()
+    rows = admin_request_ban_sheet.get_all_values()
+    header = rows[0]
+    user_id_col = header.index("user_id")
+    for i, row in enumerate(rows[1:], start=2):
+        if row[user_id_col] == user_id:
+            admin_request_ban_sheet.update_cell(i, header.index("until")+1, until)
+            admin_request_ban_sheet.update_cell(i, header.index("last_request_date")+1, now_ymd)
+            return
+    admin_request_ban_sheet.append_row([user_id, until, now_ymd])
+
+def get_last_auth(user_id):
+    users = worksheet.get_all_values()
+    if not users or len(users) < 2:
+        return None
+    header = users[0]
+    user_id_col = header.index("user_id")
+    last_auth_col = header.index("last_auth")
+    for row in users[1:]:
+        if row[user_id_col] == user_id:
+            if len(row) > last_auth_col:
+                return row[last_auth_col]
+    return None
+
+def set_last_auth(user_id, dt=None):
+    users = worksheet.get_all_values()
+    if not users or len(users) < 2:
+        return
+    header = users[0]
+    user_id_col = header.index("user_id")
+    last_auth_col = header.index("last_auth")
+    for i, row in enumerate(users[1:], start=2):
+        if row[user_id_col] == user_id:
+            worksheet.update_cell(i, last_auth_col+1, dt if dt else now_str())
+            return
 
 @app.route("/callback", methods=["POST"])
 def callback():
@@ -262,7 +296,7 @@ def handle_message(event):
     user_id = event.source.user_id
     text = event.message.text.strip()
 
-    # スプレッドシートによる応答停止チェック
+    # suspendチェック
     is_sus, delta, reason, _ = check_suspend(user_id)
     if is_sus:
         mins = int(delta.total_seconds() // 60)
@@ -273,7 +307,39 @@ def handle_message(event):
         )
         return
 
-    # 応答停止コマンド（1番管理者のみが実行可能）
+    # 選手のみ自動ログアウト（adminは除外）
+    if not is_admin(user_id):
+        last_auth_str = get_last_auth(user_id)
+        if last_auth_str:
+            try:
+                last_auth_dt = datetime.datetime.fromisoformat(last_auth_str)
+            except Exception:
+                try:
+                    last_auth_dt = datetime.datetime.strptime(last_auth_str, "%Y-%m-%d %H:%M:%S.%f")
+                except Exception:
+                    last_auth_dt = None
+            if last_auth_dt:
+                now = datetime.datetime.now(pytz.timezone('Asia/Tokyo'))
+                if last_auth_dt.tzinfo is None:
+                    last_auth_dt = pytz.timezone('Asia/Tokyo').localize(last_auth_dt)
+                if (now - last_auth_dt).total_seconds() > 600:
+                    set_last_auth(user_id, "")  # ログアウト
+                    line_bot_api.reply_message(
+                        event.reply_token,
+                        TextSendMessage(text="10分間操作がなかったため自動ログアウトしました。再度ログインしてください。")
+                    )
+                    return
+        set_last_auth(user_id, now_str())
+
+    # help
+    if text.lower() == "help":
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=get_help_message(user_id))
+        )
+        return
+
+    # stop responding to ...（1番管理者のみ）
     match = re.match(r"stop responding to (.+?) for ([\d.]+) time because you did (.+)", text, re.I)
     if match and is_head_admin(user_id):
         target_name = match.group(1).strip()
@@ -289,7 +355,6 @@ def handle_message(event):
                 target_user_id = row[user_id_col]
                 if target_user_id:
                     until = jst_now() + datetime.timedelta(hours=duration)
-                    # 既存停止があれば上書きする
                     rows = suspend_sheet.get_all_values()
                     suspended = False
                     for i, srow in enumerate(rows[1:], start=2):
@@ -300,7 +365,6 @@ def handle_message(event):
                             break
                     if not suspended:
                         suspend_sheet.append_row([target_user_id, until.strftime("%Y/%m/%d %H:%M"), reason])
-                    # Push通知は無し。次にしゃべった時のみReplyで知らせる。
                     line_bot_api.reply_message(
                         event.reply_token,
                         TextSendMessage(text=f"{target_name}を{duration:.1f}時間の間一時停止しました。理由: {reason}")
@@ -314,6 +378,7 @@ def handle_message(event):
             )
         return
 
+    # end
     if text.lower() == "end" and user_id in user_states:
         user_states.pop(user_id)
         line_bot_api.reply_message(
@@ -322,25 +387,14 @@ def handle_message(event):
         )
         return
 
-    if text.lower() == "help":
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text=get_help_message(user_id))
-        )
-        return
-
-    # 管理者はIDT関連コマンドを利用不可
-    if is_admin(user_id):
-        if text.lower() in ["cal idt", "add idt"] or (
-            user_id in user_states and user_states[user_id].get('mode', '').startswith('idt')
-        ):
+    # cal idt（管理者は利用不可）
+    if text.lower() == "cal idt":
+        if is_admin(user_id):
             line_bot_api.reply_message(
                 event.reply_token,
                 TextSendMessage(text="あなたは管理者アカウントのため、IDT記録機能はご利用できません。")
             )
             return
-
-    if text.lower() == "cal idt":
         user_states[user_id] = {'mode': 'idt'}
         line_bot_api.reply_message(
             event.reply_token,
@@ -393,6 +447,7 @@ def handle_message(event):
         user_states.pop(user_id)
         return
 
+    # login
     if text.lower() == "login":
         user_states[user_id] = {'mode': 'login', 'step': 1, 'login_data': {}}
         line_bot_api.reply_message(
@@ -403,6 +458,7 @@ def handle_message(event):
         )
         return
 
+    # loginフロー
     if user_id in user_states and user_states[user_id].get('mode') == 'login':
         parts = text.split(" ")
         if len(parts) != 3:
@@ -488,6 +544,7 @@ def handle_message(event):
                 )
             return
 
+    # OTP認証
     if user_id in user_states and user_states[user_id].get("step") == 2:
         input_otp = text.strip()
         for owner_id, otp_info in otp_store.items():
@@ -526,152 +583,140 @@ def handle_message(event):
                     )
                     return
 
-    # add idtコマンド
+    # add idt
     if re.match(r"^add idt($|[\s　])", text, re.I):
         if is_admin(user_id):
+            user_states[user_id] = {"mode": "add_idt_admin"}
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text="あなたは管理者アカウントのため、IDT記録機能はご利用できません。")
-            )
-            return
-        users = worksheet.get_all_values()
-        header = users[0]
-        data = users[1:]
-        user_id_col = header.index("user_id")
-        is_logged_in = any(row[user_id_col] == user_id for row in data)
-        if not is_logged_in:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="IDT記録の入力にはログインが必要です。“login”でログインしてください。")
-            )
-            return
-        if user_id in idt_memory:
-            user_states[user_id] = {"mode": "add_idt_memory"}
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="IDTの記録を追加します。タイム・体重・性別を半角スペース区切りで「mm:ss.s xx.x m/w」の形式で入力してください。")
+                TextSendMessage(
+                    text="管理者記録追加モードです。対象の選手「名前 学年 タイム 性別(m/w)」を半角スペース区切りで入力してください。\n例: 太郎 2 7:32.8 m"
+                )
             )
         else:
-            user_states[user_id] = {"mode": "add_idt_direct"}
+            users = worksheet.get_all_values()
+            header = users[0]
+            data = users[1:]
+            user_id_col = header.index("user_id")
+            is_logged_in = any(row[user_id_col] == user_id for row in data)
+            if not is_logged_in:
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text="IDT記録の入力にはログインが必要です。“login”でログインしてください。")
+                )
+                return
+            user_states[user_id] = {"mode": "add_idt_user"}
             line_bot_api.reply_message(
                 event.reply_token,
                 TextSendMessage(
-                    text="IDTの記録が直近のやり取りで行われていないようです。\nタイム・体重・性別を半角スペース区切りで「mm:ss.s xx.x m/w」の形式で入力してください。"
+                    text="IDT記録追加モードです。タイム・性別を半角スペース区切りで入力してください。\n例: 7:32.8 m"
                 )
             )
         return
 
-    # add idt: 直近IDT計算あり
-    if user_id in user_states and user_states[user_id].get("mode") == "add_idt_memory":
-        result = parse_idt_input(text)
-        if not result:
+    # 管理者によるIDT記録追加
+    if user_id in user_states and user_states[user_id].get("mode") == "add_idt_admin":
+        parts = text.split(" ")
+        if len(parts) != 4:
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text="入力形式が正しくありません。\nタイム・体重・性別を半角スペース区切りで「mm:ss.s xx.x m/w」の形式で入力してください。")
+                TextSendMessage(text="形式が正しくありません。\n名前 学年 タイム 性別 の順でスペース区切りで入力してください。")
             )
             return
-        time_str, wei, gstr = result
+        name, grade, time_str, gender = parts
+        if gender.lower() not in ("m", "w"):
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="性別は m か w で入力してください。")
+            )
+            return
         t = parse_time_str(time_str)
         if not t:
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text="タイム形式が正しくありません。7:32.8 のように入力してください。")
+                TextSendMessage(text="タイム形式が正しくありません。例: 7:32.8")
             )
             return
-        if gstr not in ("m", "w"):
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="性別は m（男性） か w（女性）で入力してください。")
-            )
-            return
-        gend = 0.0 if gstr == "m" else 1.0
         mi, se, sed = t
-        score = calc_idt(mi, se, sed, wei, gend)
+        gend = 0.0 if gender.lower() == "m" else 1.0
+        users = worksheet.get_all_values()
+        header = users[0]
+        name_col = header.index("name")
+        grade_col = header.index("grade")
+        weight_col = header.index("weight") if "weight" in header else None
+        weight = ""
+        for row in users[1:]:
+            if row[name_col] == name and row[grade_col] == grade:
+                if weight_col is not None and len(row) > weight_col:
+                    weight = row[weight_col]
+                break
+        score = calc_idt(mi, se, sed, float(weight) if weight else 0, gend)
         score_disp = round(score + 1e-8, 2)
         record_time = today_jst_ymd()
-        name, grade = get_user_name_grade(user_id)
-        if not name or not grade:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="ユーザー情報の取得に失敗しました。再度ログインしてください。")
+        row = [name, grade, gender, record_time, time_str, weight, score_disp]
+        idt_record_sheet.append_row(row, value_input_option="USER_ENTERED")
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(
+                text=f"{name}（学年:{grade}）のIDT記録を追加しました。IDT: {score_disp:.2f}%"
             )
-            return
-        gender_str = "m" if gend == 0.0 else "w"
-        # [name, grade, gender, record_time, time, weight, idt]
-        row = [name, grade, gender_str, record_time, time_str, wei, score_disp]
-        try:
-            idt_record_sheet.append_row(row, value_input_option="USER_ENTERED")
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(
-                    text=f"IDTの記録を{record_time}の日付で登録しました。\n今回のIDTは{score_disp:.2f}%でした。"
-                )
-            )
-            user_states.pop(user_id)
-            idt_memory.pop(user_id)
-        except Exception as e:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text=f"記録に失敗しました。{e}")
-            )
+        )
+        user_states.pop(user_id)
         return
 
-    # add idt: 直近IDT計算なし
-    if user_id in user_states and user_states[user_id].get("mode") == "add_idt_direct":
-        result = parse_idt_input(text)
-        if not result:
+    # 一般ユーザによる記録追加
+    if user_id in user_states and user_states[user_id].get("mode") == "add_idt_user":
+        parts = text.split(" ")
+        if len(parts) != 2:
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text="入力形式が正しくありません。\nタイム・体重・性別を半角スペース区切りで「mm:ss.s xx.x m/w」の形式で入力してください。")
+                TextSendMessage(text="形式が正しくありません。\nタイム 性別 の順でスペース区切りで入力してください。")
             )
             return
-        time_str, wei, gstr = result
+        time_str, gender = parts
+        if gender.lower() not in ("m", "w"):
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="性別は m か w で入力してください。")
+            )
+            return
         t = parse_time_str(time_str)
         if not t:
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text="タイム形式が正しくありません。7:32.8 のように入力してください。")
+                TextSendMessage(text="タイム形式が正しくありません。例: 7:32.8")
             )
             return
-        if gstr not in ("m", "w"):
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="性別は m（男性） か w（女性）で入力してください。")
-            )
-            return
-        gend = 0.0 if gstr == "m" else 1.0
         mi, se, sed = t
-        score = calc_idt(mi, se, sed, wei, gend)
+        gend = 0.0 if gender.lower() == "m" else 1.0
+        name, grade = get_user_name_grade(user_id)
+        users = worksheet.get_all_values()
+        header = users[0]
+        name_col = header.index("name")
+        grade_col = header.index("grade")
+        weight_col = header.index("weight") if "weight" in header else None
+        weight = ""
+        for row in users[1:]:
+            if row[name_col] == name and row[grade_col] == grade:
+                if weight_col is not None and len(row) > weight_col:
+                    weight = row[weight_col]
+                break
+        score = calc_idt(mi, se, sed, float(weight) if weight else 0, gend)
         score_disp = round(score + 1e-8, 2)
         record_time = today_jst_ymd()
-        name, grade = get_user_name_grade(user_id)
-        if not name or not grade:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="ユーザー情報の取得に失敗しました。再度ログインしてください。")
+        row = [name, grade, gender, record_time, time_str, weight, score_disp]
+        idt_record_sheet.append_row(row, value_input_option="USER_ENTERED")
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(
+                text=f"あなたのIDT記録を{record_time}に追加しました。IDT: {score_disp:.2f}%"
             )
-            return
-        gender_str = "m" if gend == 0.0 else "w"
-        row = [name, grade, gender_str, record_time, f"{mi}:{se:02d}.{sed if sed else 0}", wei, score_disp]
-        try:
-            idt_record_sheet.append_row(row, value_input_option="USER_ENTERED")
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(
-                    text=f"IDTの記録を{record_time}の日付で登録しました。\n今回のIDTは{score_disp:.2f}%でした。"
-                )
-            )
-            user_states.pop(user_id)
-        except Exception as e:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text=f"記録に失敗しました。{e}")
-            )
+        )
+        user_states.pop(user_id)
         return
 
     # ---------- 管理者申請・承認制度 ----------
     if text.lower() == "admin request":
-        # まず再提出禁止期間のチェック
         ban_until = get_admin_request_ban(user_id)
         if ban_until:
             now = jst_now()
@@ -682,7 +727,6 @@ def handle_message(event):
                     TextSendMessage(text=f"あなたは以前admin requestを提出した際に認められなかったので残り{rest_days}日間は再度リクエストを提出することができません。")
                 )
                 return
-        # 通常フロー：1段階目
         user_states[user_id] = {"mode": "admin_request", "step": 1}
         line_bot_api.reply_message(
             event.reply_token,
@@ -711,18 +755,15 @@ def handle_message(event):
             return
         elif step == 2:
             if text not in ["はい", "はい。", "yes", "Yes", "YES"]:
-                # いいえの場合は終了
                 user_states.pop(user_id)
                 line_bot_api.reply_message(
                     event.reply_token,
                     TextSendMessage(text="admin requestをキャンセルしました。")
                 )
                 return
-            # 「はい」と答えた場合のみPush
             name = user_states[user_id].get("name")
             grade = user_states[user_id].get("grade")
             key = user_states[user_id].get("key")
-            # ユーザー登録チェック
             header = ensure_header()
             users = worksheet.get_all_values()
             data = users[1:] if len(users) > 1 else []
@@ -743,7 +784,6 @@ def handle_message(event):
                     TextSendMessage(text="申請失敗。あなたはユーザーとして登録されていません。")
                 )
                 return
-            # Push通知はここだけ
             admin_request_store[user_id] = {"name": name, "grade": grade, "key": key}
             number_to_userid = get_admin_number_to_userid()
             if 1 in number_to_userid:
@@ -784,10 +824,17 @@ def handle_message(event):
                             event.reply_token,
                             TextSendMessage(text=f"{target_name}を管理者({next_num})に承認しました。")
                         )
-                        # 承認時のみPush、却下時は何もしない
+                        # 管理者アカウント作成誘導メッセージ
                         line_bot_api.push_message(
                             request_user_id,
-                            TextSendMessage(text="あなたの管理者申請が承認されました。以降、IDT記録など選手向け機能はご利用いただけません。")
+                            TextSendMessage(
+                                text=(
+                                    "あなたの管理者申請が承認されました。以降、IDT記録など選手向け機能はご利用いただけません。\n"
+                                    "Adminアカウントの作成に進みます。\n"
+                                    "学年、希望する名前とキーを入力してください。\n"
+                                    "入力の順は 学年 名前 キー の順で入力してください。"
+                                )
+                            )
                         )
                         admin_request_store.pop(request_user_id)
                         return
@@ -884,6 +931,7 @@ def handle_message(event):
             )
         return
 
+    # ここまでで主要分岐は全てカバー
     return
 
 if __name__ == "__main__":
