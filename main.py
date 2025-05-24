@@ -282,6 +282,7 @@ def check_suspend(user_id):
                 suspend_sheet.delete_rows(i)
                 return (False, None, None, None)
     return (False, None, None, None)
+
 @app.route("/callback", methods=["POST"])
 def callback():
     signature = request.headers["X-Line-Signature"]
@@ -296,9 +297,6 @@ def callback():
 def handle_message(event):
     user_id = event.source.user_id
     text = event.message.text.strip()
-
-    # スプレッドシートによる応答停止チェック
-# ...（前略）...
 
     is_sus, delta, reason, _ = check_suspend(user_id)
     if is_sus:
@@ -337,7 +335,6 @@ def handle_message(event):
                         TextSendMessage(text="10分間操作がなかったため自動ログアウトしました。再度ログインしてください。")
                     )
                     return
-            # last_authが日時の場合のみ更新
             set_last_auth(user_id, now_str())
 
     if text.lower() == "end" and user_id in user_states:
@@ -348,7 +345,6 @@ def handle_message(event):
         )
         return
 
-    # helpコマンド
     if text.lower() == "help":
         line_bot_api.reply_message(
             event.reply_token,
@@ -356,7 +352,6 @@ def handle_message(event):
         )
         return
 
-    # stop responding to ...（1番管理者のみ）
     match = re.match(r"stop responding to (.+?) for ([\d.]+) time because you did (.+)", text, re.I)
     if match and is_head_admin(user_id):
         target_name = match.group(1).strip()
@@ -394,7 +389,6 @@ def handle_message(event):
                 TextSendMessage(text="該当するユーザーが見つかりません。")
             )
         return
-
     # cal idt（管理者は利用不可）
     if text.lower() == "cal idt":
         if is_admin(user_id):
@@ -457,6 +451,13 @@ def handle_message(event):
 
     # loginコマンド
     if text.lower() == "login":
+        if get_user_name_grade(user_id)[0]:
+            user_name = get_user_name_grade(user_id)[0]
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=f"既にあなたは「{user_name}」としてログインしています。")
+            )
+            return
         user_states[user_id] = {'mode': 'login', 'step': 1, 'login_data': {}}
         line_bot_api.reply_message(
             event.reply_token,
@@ -468,92 +469,126 @@ def handle_message(event):
 
     # loginフロー
     if user_id in user_states and user_states[user_id].get('mode') == 'login':
-        parts = text.split(" ")
-        if len(parts) != 3:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="形式が正しくありません。\n名前 学年 キー の順でスペース区切りで入力してください。\n例: 太郎 2 tarou123")
-            )
-            return
-
-        name, grade, key = parts
-        header = ensure_header()
-        users = worksheet.get_all_values()
-        data = users[1:] if len(users) > 1 else []
-        name_col = header.index("name")
-        grade_col = header.index("grade")
-        key_col = header.index("key")
-        user_id_col = header.index("user_id")
-        last_auth_col = header.index("last_auth")
-        admin_col = header.index("admin")
-
-        found = False
-        for i, row in enumerate(data, start=2):
-            if row[name_col] == name and row[grade_col] == grade and row[key_col] == key:
-                found = True
-                registered_user_id = row[user_id_col] if len(row) > user_id_col else ""
-                if registered_user_id == "":
-                    worksheet.update_cell(i, user_id_col + 1, user_id)
-                    worksheet.update_cell(i, last_auth_col + 1, now_str())
-                    line_bot_api.reply_message(
-                        event.reply_token,
-                        TextSendMessage(text="認証成功！ユーザー情報を登録しました。")
-                    )
-                    user_states.pop(user_id)
-                elif registered_user_id == user_id:
-                    worksheet.update_cell(i, last_auth_col + 1, now_str())
-                    line_bot_api.reply_message(
-                        event.reply_token,
-                        TextSendMessage(text="ログイン成功！ようこそ。")
-                    )
-                    user_states.pop(user_id)
-                else:
-                    otp = generate_otp()
-                    otp_store[registered_user_id] = {
-                        "otp": otp,
-                        "requester_id": user_id,
-                        "name": name,
-                        "timestamp": datetime.datetime.now()
-                    }
-                    line_bot_api.reply_message(
-                        event.reply_token,
-                        TextSendMessage(
-                            text="このアカウントはすでに別の端末からログインを済ましています。\nこの操作があなたのものであれば元の端末に対して下記の確認コードを入力してください。\n確認コードを入力するまでログインは完了しません。"
-                        )
-                    )
-                    line_bot_api.push_message(
-                        registered_user_id,
-                        TextSendMessage(
-                            text=f"{name}があなたのアカウントに対しログインを試みています。\nこの操作があなたのものであれば以下のコードをログイン画面に入力してください。\n確認コード: {otp}"
-                        )
-                    )
-                    user_states[user_id]["step"] = 2
+        step = user_states[user_id].get("step", 1)
+        if step == 1:
+            parts = text.split(" ")
+            if len(parts) != 3:
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text="形式が正しくありません。\n名前 学年 キー の順でスペース区切りで入力してください。\n例: 太郎 2 tarou123")
+                )
                 return
 
-        if not found:
-            try:
-                new_row = [""] * len(header)
-                new_row[name_col] = name
-                new_row[grade_col] = grade
-                new_row[key_col] = key
-                new_row[user_id_col] = user_id
-                new_row[last_auth_col] = now_str()
-                new_row[admin_col] = ""
-                worksheet.append_row(new_row, value_input_option="USER_ENTERED")
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text="初回登録が完了しました。ログイン成功です。")
-                )
-                user_states.pop(user_id)
-            except Exception as e:
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text=f"登録に失敗しました: {e}")
-                )
-            return
+            name, grade, key = parts
+            header = ensure_header()
+            users = worksheet.get_all_values()
+            data = users[1:] if len(users) > 1 else []
+            name_col = header.index("name")
+            grade_col = header.index("grade")
+            key_col = header.index("key")
+            user_id_col = header.index("user_id")
+            last_auth_col = header.index("last_auth")
+            admin_col = header.index("admin")
 
-    # OTP認証
-    if user_id in user_states and user_states[user_id].get("step") == 2:
+            found = False
+            for i, row in enumerate(data, start=2):
+                if row[name_col] == name and row[grade_col] == grade and row[key_col] == key:
+                    found = True
+                    registered_user_id = row[user_id_col] if len(row) > user_id_col else ""
+                    if registered_user_id == "":
+                        worksheet.update_cell(i, user_id_col + 1, user_id)
+                        worksheet.update_cell(i, last_auth_col + 1, now_str())
+                        line_bot_api.reply_message(
+                            event.reply_token,
+                            TextSendMessage(text="認証成功！ユーザー情報を登録しました。")
+                        )
+                        user_states.pop(user_id)
+                    elif registered_user_id == user_id:
+                        worksheet.update_cell(i, last_auth_col + 1, now_str())
+                        line_bot_api.reply_message(
+                            event.reply_token,
+                            TextSendMessage(text="ログイン成功！ようこそ。")
+                        )
+                        user_states.pop(user_id)
+                    else:
+                        # OTPの代わりに確認メッセージを送信
+                        user_states[user_id].update({
+                            "step": "awaiting_otp_confirm",
+                            "target_user_id": registered_user_id,
+                            "name": name,
+                            "grade": grade,
+                            "key": key
+                        })
+                        line_bot_api.reply_message(
+                            event.reply_token,
+                            TextSendMessage(
+                                text=(
+                                    "今ログインしようとしているアカウントは既に別の端末と接続されています。\n"
+                                    "不正ログインを実行した場合、数日間の応答停止になる場合があります。\n\n"
+                                    "確認コードを紐づいている端末に対して送信しますか？(はい/いいえ)"
+                                )
+                            )
+                        )
+                    return
+
+            if not found:
+                try:
+                    new_row = [""] * len(header)
+                    new_row[name_col] = name
+                    new_row[grade_col] = grade
+                    new_row[key_col] = key
+                    new_row[user_id_col] = user_id
+                    new_row[last_auth_col] = now_str()
+                    new_row[admin_col] = ""
+                    worksheet.append_row(new_row, value_input_option="USER_ENTERED")
+                    line_bot_api.reply_message(
+                        event.reply_token,
+                        TextSendMessage(text="初回登録が完了しました。ログイン成功です。")
+                    )
+                    user_states.pop(user_id)
+                except Exception as e:
+                    line_bot_api.reply_message(
+                        event.reply_token,
+                        TextSendMessage(text=f"登録に失敗しました: {e}")
+                    )
+                return
+
+    # loginフローOTP同意確認
+    elif user_id in user_states and user_states[user_id].get('mode') == 'login' and user_states[user_id].get("step") == "awaiting_otp_confirm":
+        if text.lower() not in ["はい", "はい。", "yes", "yes.", "y"]:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="OTP送信をキャンセルしました。ログインをやり直してください。")
+            )
+            user_states.pop(user_id)
+            return
+        # ここでOTP送信
+        registered_user_id = user_states[user_id]["target_user_id"]
+        name = user_states[user_id]["name"]
+        otp = generate_otp()
+        otp_store[registered_user_id] = {
+            "otp": otp,
+            "requester_id": user_id,
+            "name": name,
+            "timestamp": datetime.datetime.now()
+        }
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(
+                text="確認コードを紐づいている端末に送信しました。元の端末でコードを確認して入力してください。"
+            )
+        )
+        line_bot_api.push_message(
+            registered_user_id,
+            TextSendMessage(
+                text=f"{name}があなたのアカウントに対しログインを試みています。\nこの操作があなたのものであれば以下のコードをログイン画面に入力してください。\n確認コード: {otp}"
+            )
+        )
+        user_states[user_id]["step"] = "otp"
+        return
+
+    # login OTP認証
+    elif user_id in user_states and user_states[user_id].get('mode') == 'login' and user_states[user_id].get("step") == "otp":
         input_otp = text.strip()
         for owner_id, otp_info in otp_store.items():
             if otp_info["requester_id"] == user_id:
@@ -572,7 +607,6 @@ def handle_message(event):
                             worksheet.update_cell(i, user_id_col + 1, user_id)
                             worksheet.update_cell(i, last_auth_col + 1, now_str())
                             break
-
                     line_bot_api.reply_message(
                         event.reply_token,
                         TextSendMessage(text="OTP認証に成功しました。ログインが完了しました。")
