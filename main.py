@@ -298,6 +298,8 @@ def handle_message(event):
     text = event.message.text.strip()
 
     # スプレッドシートによる応答停止チェック
+# ...（前略）...
+
     is_sus, delta, reason, _ = check_suspend(user_id)
     if is_sus:
         mins = int(delta.total_seconds() // 60)
@@ -307,10 +309,16 @@ def handle_message(event):
             TextSendMessage(text=f"あなたは「{reason}」をしたので、あと{hours:.1f}時間（{mins}分）の間Botからの応答が制限されます。")
         )
         return
-        
+
     if not is_admin(user_id):
         last_auth_str = get_last_auth(user_id)
-        if last_auth_str:  
+        if last_auth_str == "LOGGED_OUT":
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="10分間操作がなかったため自動ログアウトしました。再度ログインしてください。")
+            )
+            return
+        elif last_auth_str:
             try:
                 last_auth_dt = datetime.datetime.fromisoformat(last_auth_str)
             except Exception:
@@ -329,8 +337,8 @@ def handle_message(event):
                         TextSendMessage(text="10分間操作がなかったため自動ログアウトしました。再度ログインしてください。")
                     )
                     return
-        # last_authがあった場合のみ更新
-        set_last_auth(user_id, now_str())
+            # last_authが日時の場合のみ更新
+            set_last_auth(user_id, now_str())
 
     if text.lower() == "end" and user_id in user_states:
         user_states.pop(user_id)
