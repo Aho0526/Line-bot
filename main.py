@@ -136,16 +136,15 @@ def get_user_name_grade(user_id):
     users = worksheet.get_all_values()
     if not users:
         return None, None
-    header = users[0]
+    header = [h.strip() for h in users[0]]
     user_id_col = header.index("user_id")
     name_col = header.index("name")
     grade_col = header.index("grade")
     for row in users[1:]:
-        # 修正ポイント：user_idが空文字やNoneのものは一致扱いしない
         if len(row) > user_id_col and row[user_id_col] and row[user_id_col] == user_id:
             return row[name_col], row[grade_col]
     return None, None
-
+    
 def get_last_auth(user_id):
     users = worksheet.get_all_values()
     if not users or len(users) < 2:
