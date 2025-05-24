@@ -308,7 +308,7 @@ def handle_message(event):
         )
         return
 
-    if not is_admin(user_id):
+       if not is_admin(user_id):
         last_auth_str = get_last_auth(user_id)
         if last_auth_str:  
             try:
@@ -323,7 +323,7 @@ def handle_message(event):
                 if last_auth_dt.tzinfo is None:
                     last_auth_dt = pytz.timezone('Asia/Tokyo').localize(last_auth_dt)
                 if (now - last_auth_dt).total_seconds() > 600:
-                    set_last_auth(user_id, "") 
+                    set_last_auth(user_id, "LOGGED_OUT")  # 空文字はやめて特別な値
                     line_bot_api.reply_message(
                         event.reply_token,
                         TextSendMessage(text="10分間操作がなかったため自動ログアウトしました。再度ログインしてください。")
