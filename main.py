@@ -450,23 +450,25 @@ def handle_message(event):
         return
 
 # loginコマンド
-if text.lower() == "login":
-    user_name, _ = get_user_name_grade(user_id)
-    last_auth_str = get_last_auth(user_id)
-    if user_name and last_auth_str != "LOGGED_OUT":
+    if text.lower() == "login":
+        user_name, _ = get_user_name_grade(user_id)
+        last_auth_str = get_last_auth(user_id)
+        if user_name and last_auth_str != "LOGGED_OUT":
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=f"既にあなたは「{user_name}」としてログインしています。")
+            )
+            return
+        user_states[user_id] = {'mode': 'login', 'step': 1, 'login_data': {}}
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(text=f"既にあなたは「{user_name}」としてログインしています。")
+            TextSendMessage(
+                text="ログインするには、名前、学年、キーの順で入力してください。\n例: 太郎 2 tarou123"
+            )
         )
-        return  # ← ここはif文の中のreturn
-    user_states[user_id] = {'mode': 'login', 'step': 1, 'login_data': {}}
-    line_bot_api.reply_message(
-        event.reply_token,
-        TextSendMessage(
-            text="ログインするには、名前、学年、キーの順で入力してください。\n例: 太郎 2 tarou123"
-        )
-    )
-    return  # ← ここもif文のブロック内
+        return
+
+    # ...（以下略）...
     # loginフロー
     if user_id in user_states and user_states[user_id].get('mode') == 'login':
         step = user_states[user_id].get("step", 1)
