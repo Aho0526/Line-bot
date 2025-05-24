@@ -458,8 +458,7 @@ if text.lower() == "login":
             event.reply_token,
             TextSendMessage(text=f"既にあなたは「{user_name}」としてログインしています。")
         )
-        return
-        
+        return  # ← ここはif文の中のreturn
     user_states[user_id] = {'mode': 'login', 'step': 1, 'login_data': {}}
     line_bot_api.reply_message(
         event.reply_token,
@@ -467,8 +466,7 @@ if text.lower() == "login":
             text="ログインするには、名前、学年、キーの順で入力してください。\n例: 太郎 2 tarou123"
         )
     )
-    return
-
+    return  # ← ここもif文のブロック内
     # loginフロー
     if user_id in user_states and user_states[user_id].get('mode') == 'login':
         step = user_states[user_id].get("step", 1)
