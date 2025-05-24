@@ -299,8 +299,6 @@ def handle_message(event):
 
     # スプレッドシートによる応答停止チェック
     is_sus, delta, reason, _ = check_suspend(user_id)
-        # スプレッドシートによる応答停止チェック
-    is_sus, delta, reason, _ = check_suspend(user_id)
     if is_sus:
         mins = int(delta.total_seconds() // 60)
         hours = delta.total_seconds() / 3600
@@ -309,7 +307,8 @@ def handle_message(event):
             TextSendMessage(text=f"あなたは「{reason}」をしたので、あと{hours:.1f}時間（{mins}分）の間Botからの応答が制限されます。")
         )
         return
-       if not is_admin(user_id):
+        
+    if not is_admin(user_id):
         last_auth_str = get_last_auth(user_id)
         if last_auth_str:  
             try:
@@ -324,14 +323,14 @@ def handle_message(event):
                 if last_auth_dt.tzinfo is None:
                     last_auth_dt = pytz.timezone('Asia/Tokyo').localize(last_auth_dt)
                 if (now - last_auth_dt).total_seconds() > 600:
-                    set_last_auth(user_id, "LOGGED_OUT")  # 空文字はやめて特別な値
+                    set_last_auth(user_id, "LOGGED_OUT")
                     line_bot_api.reply_message(
                         event.reply_token,
                         TextSendMessage(text="10分間操作がなかったため自動ログアウトしました。再度ログインしてください。")
                     )
                     return
-            # last_authがあった場合のみ更新
-            set_last_auth(user_id, now_str())
+        # last_authがあった場合のみ更新
+        set_last_auth(user_id, now_str())
 
     if text.lower() == "end" and user_id in user_states:
         user_states.pop(user_id)
@@ -934,4 +933,5 @@ def handle_message(event):
     return
 
 if __name__ == "__main__":
-    app.run()
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
