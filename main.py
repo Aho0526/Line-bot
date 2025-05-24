@@ -459,6 +459,7 @@ if text.lower() == "login":
             TextSendMessage(text=f"既にあなたは「{user_name}」としてログインしています。")
         )
         return
+        
     user_states[user_id] = {'mode': 'login', 'step': 1, 'login_data': {}}
     line_bot_api.reply_message(
         event.reply_token,
