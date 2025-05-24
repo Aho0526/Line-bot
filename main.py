@@ -449,23 +449,25 @@ def handle_message(event):
         user_states.pop(user_id)
         return
 
-    # loginコマンド
+# loginコマンド
     if text.lower() == "login":
-        if get_user_name_grade(user_id)[0]:
-            user_name = get_user_name_grade(user_id)[0]
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text=f"既にあなたは「{user_name}」としてログインしています。")
-            )
-            return
-        user_states[user_id] = {'mode': 'login', 'step': 1, 'login_data': {}}
+    user_name, _ = get_user_name_grade(user_id)
+    last_auth_str = get_last_auth(user_id)
+        if user_name and last_auth_str != "LOGGED_OUT":
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(
-                text="ログインするには、名前、学年、キーの順で入力してください。\n例: 太郎 2 tarou123"
-            )
+            TextSendMessage(text=f"既にあなたは「{user_name}」としてログインしています。")
         )
         return
+            
+    user_states[user_id] = {'mode': 'login', 'step': 1, 'login_data': {}}
+    line_bot_api.reply_message(
+        event.reply_token,
+        TextSendMessage(
+            text="ログインするには、名前、学年、キーの順で入力してください。\n例: 太郎 2 tarou123"
+        )
+    )
+    return
 
     # loginフロー
     if user_id in user_states and user_states[user_id].get('mode') == 'login':
