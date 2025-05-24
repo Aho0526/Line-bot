@@ -299,6 +299,8 @@ def handle_message(event):
 
     # スプレッドシートによる応答停止チェック
     is_sus, delta, reason, _ = check_suspend(user_id)
+        # スプレッドシートによる応答停止チェック
+    is_sus, delta, reason, _ = check_suspend(user_id)
     if is_sus:
         mins = int(delta.total_seconds() // 60)
         hours = delta.total_seconds() / 3600
@@ -307,7 +309,6 @@ def handle_message(event):
             TextSendMessage(text=f"あなたは「{reason}」をしたので、あと{hours:.1f}時間（{mins}分）の間Botからの応答が制限されます。")
         )
         return
-
        if not is_admin(user_id):
         last_auth_str = get_last_auth(user_id)
         if last_auth_str:  
