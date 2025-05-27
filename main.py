@@ -730,6 +730,77 @@ def handle_message(event):
             )
         return
 
+    # loginフローOTP同意確認
+    elif user_id in user_states and user_states[user_id].get('mode') == 'login' and user_states[user_id].get("step") == "awaiting_otp_confirm":
+        if text.lower() not in ["はい", "はい。", "yes", "yes.", "y"]:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="OTP送信をキャンセルしました。ログインをやり直してください。")
+            )
+            user_states.pop(user_id)
+            return
+        # ここでOTP送信
+        registered_user_id = user_states[user_id]["target_user_id"]
+        name = user_states[user_id]["name"]
+        otp = generate_otp()
+        otp_store[registered_user_id] = {
+            "otp": otp,
+            "requester_id": user_id,
+            "name": name,
+            "timestamp": datetime.datetime.now()
+        }
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(
+                text="確認コードを紐づいている端末に送信しました。元の端末でコードを確認して入力してください。"
+            )
+        )
+        line_bot_api.push_message(
+            registered_user_id,
+            TextSendMessage(
+                text=f"{name}があなたのアカウントに対しログインを試みています。\nこの操作があなたのものであれば以下のコードをログイン画面に入力してください。\n確認コード: {otp}"
+            )
+        )
+        user_states[user_id]["step"] = "otp"
+        return
+
+    # login OTP認証
+    elif user_id in user_states and user_states[user_id].get('mode') == 'login' and user_states[user_id].get("step") == "otp":
+        input_otp = text.strip()
+        for owner_id, otp_info in otp_store.items():
+            if otp_info["requester_id"] == user_id:
+                if otp_info["otp"] == input_otp:
+                    users = worksheet.get_all_values()
+                    header = users[0]
+                    data = users[1:]
+                    name_col = header.index("name")
+                    grade_col = header.index("grade")
+                    key_col = header.index("key")
+                    user_id_col = header.index("user_id")
+                    last_auth_col = header.index("last_auth")
+                    name = otp_info["name"]
+                    for i, row in enumerate(data, start=2):
+                        if row[name_col] == name and row[user_id_col] == owner_id:
+                            worksheet.update_cell(i, user_id_col + 1, user_id)
+                            worksheet.update_cell(i, last_auth_col + 1, now_str())
+                            break
+                    line_bot_api.reply_message(
+                        event.reply_token,
+                        TextSendMessage(text="OTP認証に成功しました。ログインが完了しました。")
+                    )
+                    line_bot_api.push_message(
+                        owner_id,
+                        TextSendMessage(text="確認コードが正しく入力され、端末が切り替わりました。")
+                    )
+                    otp_store.pop(owner_id)
+                    user_states.pop(user_id)
+                    return
+                else:
+                    line_bot_api.reply_message(
+                        event.reply_token,
+                        TextSendMessage(text="確認コードが正しくありません。再度入力してください。")
+                    )
+                    return
 
     # loginフローOTP同意確認
     elif user_id in user_states and user_states[user_id].get('mode') == 'login' and user_states[user_id].get("step") == "awaiting_otp_confirm":
