@@ -378,6 +378,7 @@ def handle_message(event):
     user_id = event.source.user_id
     text = event.message.text.strip()
 
+    # アカウント停止中チェック
     is_sus, delta, reason, _ = check_suspend(user_id)
     if is_sus:
         mins = int(delta.total_seconds() // 60)
@@ -388,7 +389,7 @@ def handle_message(event):
         )
         return
 
-    # logoutコマンド（追加）
+    # logoutコマンド
     if text.lower() == "logout":
         set_last_auth(user_id, "LOGGED_OUT")
         if user_id in user_states:
@@ -399,7 +400,7 @@ def handle_message(event):
         )
         return
 
-    # 自動ログアウト処理を1時間へ変更。adminは無限ログイン
+    # 自動ログアウト処理（adminは除外、1時間未操作で自動ログアウト）
     if not is_admin(user_id):
         last_auth_str = get_last_auth(user_id)
         if last_auth_str == "LOGGED_OUT":
@@ -431,6 +432,23 @@ def handle_message(event):
                     return
             set_last_auth(user_id, now_str())
 
+    # ログインコマンド（v12で超簡素化）
+    if text.lower() == "login":
+        user_name, _ = get_user_name_grade(user_id)
+        if user_name:
+            set_last_auth(user_id, now_str())
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=f'あなたは「{user_name}」としてログインしました。')
+            )
+        else:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text='未登録のユーザーです。管理者に登録してもらってください。')
+            )
+        return
+
+    # 入力モード終了
     if text.lower() == "end" and user_id in user_states:
         user_states.pop(user_id)
         line_bot_api.reply_message(
@@ -439,6 +457,7 @@ def handle_message(event):
         )
         return
 
+    # ヘルプコマンド
     if text.lower() == "help":
         line_bot_api.reply_message(
             event.reply_token,
@@ -446,6 +465,7 @@ def handle_message(event):
         )
         return
 
+    # 管理者による一時停止コマンド
     match = re.match(r"stop responding to (.+?) for ([\d.]+) time because you did (.+)", text, re.I)
     if match and is_head_admin(user_id):
         target_name = match.group(1).strip()
@@ -483,6 +503,7 @@ def handle_message(event):
                 TextSendMessage(text="該当するユーザーが見つかりません。")
             )
         return
+        
     # cal idt（管理者は利用不可）
     if text.lower() == "cal idt":
         if is_admin(user_id):
