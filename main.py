@@ -378,7 +378,7 @@ def handle_message(event):
     user_id = event.source.user_id
     text = event.message.text.strip()
 
-    # アカウント停止中チェック
+    # ① アカウント停止中チェック（最優先でreturn）
     is_sus, delta, reason, _ = check_suspend(user_id)
     if is_sus:
         mins = int(delta.total_seconds() // 60)
@@ -389,7 +389,7 @@ def handle_message(event):
         )
         return
 
-    # logoutコマンド
+    # ② logout, help, cal idt, loginコマンドは「自動ログアウト判定」より上でreturn
     if text.lower() == "logout":
         set_last_auth(user_id, "LOGGED_OUT")
         if user_id in user_states:
@@ -400,7 +400,70 @@ def handle_message(event):
         )
         return
 
-    # 自動ログアウト処理（adminは除外、1時間未操作で自動ログアウト）
+    if text.lower() == "help":
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=get_help_message(user_id))
+        )
+        return
+
+    if text.lower() == "cal idt":
+        if is_admin(user_id):
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="あなたは管理者アカウントのため、IDT記録機能はご利用できません。")
+            )
+            return
+        user_states[user_id] = {'mode': 'idt'}
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(
+                text="タイム・体重・性別を半角スペース区切りで「mm:ss.s xx.x m/w」の形式で入力してください。\n"
+                     "例: 7:32.8 56.3 m\n"
+                     "性別は 男性=m、女性=w です。\n"
+                     "空白やコロンの使い分けにご注意ください。\n"
+                     "モード終了の場合は「end」と入力してください。"
+            )
+        )
+        return
+
+    if text.lower() == "login":
+        user_name, _ = get_user_name_grade(user_id)
+        last_auth_str = get_last_auth(user_id)
+        users = worksheet.get_all_values()
+        header = users[0]
+        user_id_col = header.index("user_id")
+        name_col = header.index("name")
+        grade_col = header.index("grade")
+        key_col = header.index("key")
+        data = users[1:] if len(users) > 1 else []
+
+        # user_id登録済み
+        if user_name:
+            if last_auth_str != "LOGGED_OUT":
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text=f"既にあなたは「{user_name}」としてログインしています。")
+                )
+                return
+            user_states[user_id] = {'mode': 'login_confirm', 'name': user_name}
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=f'「{user_name}」としてログインしますか？（はい／いいえ）')
+            )
+            return
+
+        # user_id未登録 → 初回登録
+        user_states[user_id] = {'mode': 'login_first', 'step': 1}
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(
+                text="初回登録です。名前、学年、キーをスペース区切りで入力してください。\n例: 太郎 2 tarou123"
+            )
+        )
+        return
+
+    # ③ ここから下で「last_auth_str == 'LOGGED_OUT'」判定を行う
     if not is_admin(user_id):
         last_auth_str = get_last_auth(user_id)
         if last_auth_str == "LOGGED_OUT":
@@ -431,8 +494,6 @@ def handle_message(event):
                     )
                     return
             set_last_auth(user_id, now_str())
-
-    # --- loginコマンドとその分岐 ---
 
     if text.lower() == "login":
         user_name, _ = get_user_name_grade(user_id)
