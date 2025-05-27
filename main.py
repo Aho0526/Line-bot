@@ -392,22 +392,35 @@ def handle_message(event):
         return
 
     # 2. logout, help, cal idt, loginコマンドは自動ログアウト判定より上で
-    if text.lower() == "logout":
-        set_last_auth(user_id, "LOGGED_OUT")
+if text.lower() == "logout":
+    try:
+        print(f"Logout requested by user: {user_id}")
+        
+        # last_authカラムを空白に設定して未ログイン状態を表現
+        set_last_auth(user_id, "")
+        print(f"set_last_auth executed for user: {user_id}, set to empty string")
+        
+        # user_statesから削除してログアウト状態を管理
         if user_id in user_states:
             user_states.pop(user_id)
+            print(f"user_states cleared for user: {user_id}")
+        
+        # 応答メッセージを送信
         line_bot_api.reply_message(
             event.reply_token,
             TextSendMessage(text="ログアウトしました。再度利用するにはloginしてください。")
         )
-        return
+        print(f"Logout response sent to user: {user_id}")
 
-    if text.lower() == "help":
+    except Exception as e:
+        print(f"Error during logout process for user: {user_id}, Error: {e}")
+        import traceback
+        traceback.print_exc()
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(text=get_help_message(user_id))
+            TextSendMessage(text="ログアウト処理中にエラーが発生しました。管理者に連絡してください。")
         )
-        return
+    return
 
     # cal idtはログイン不要で利用可（特例）
     if text.lower() == "cal idt":
