@@ -467,7 +467,7 @@ def handle_message(event):
     if not is_admin(user_id):
         last_auth_str = get_last_auth(user_id)
         if last_auth_str == "LOGGED_OUT":
-             line_bot_api.reply_message(
+             line_bot_api.reply_message()
                 event.reply_token,
             if text.lower() not in ["login", "cal idt"]:
                 TextSendMessage(text="1時間操作がなかったため自動ログアウトしました。再度ログインしてください。")
