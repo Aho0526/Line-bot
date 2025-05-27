@@ -466,7 +466,7 @@ def handle_message(event):
             )
         )
         return
-    # ----- loginフローここまで -----
+        
 
     # 3. 自動ログアウト判定
     if not is_admin(user_id):
@@ -487,57 +487,56 @@ def handle_message(event):
                     last_auth_dt = datetime.datetime.strptime(last_auth_str, "%Y-%m-%d %H:%M:%S.%f")
                 except Exception:
                     last_auth_dt = None
-if last_auth_dt:
-    now = datetime.datetime.now(pytz.timezone('Asia/Tokyo'))
-    if last_auth_dt.tzinfo is None:
-        last_auth_dt = pytz.timezone('Asia/Tokyo').localize(last_auth_dt)
-    if (now - last_auth_dt).total_seconds() > 3600:
-        set_last_auth(user_id, "LOGGED_OUT")
-        if user_id in user_states:
-            user_states.pop(user_id)
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text="1時間操作がなかったため自動ログアウトしました。再度ログインしてください。")
-        )
-        return
-set_last_auth(user_id, now_str())
+        if last_auth_dt:
+            now = datetime.datetime.now(pytz.timezone('Asia/Tokyo'))
+            if last_auth_dt.tzinfo is None:
+                last_auth_dt = pytz.timezone('Asia/Tokyo').localize(last_auth_dt)
+            if (now - last_auth_dt).total_seconds() > 3600:
+                set_last_auth(user_id, "LOGGED_OUT")
+                if user_id in user_states:
+                    user_states.pop(user_id)
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text="1時間操作がなかったため自動ログアウトしました。再度ログインしてください。")
+                )
+                return
+        set_last_auth(user_id, now_str())
 
-if text.lower() == "login":
-    user_name, _ = get_user_name_grade(user_id)
-    last_auth_str = get_last_auth(user_id)
-    users = worksheet.get_all_values()
-    header = users[0]
-    user_id_col = header.index("user_id")
-    name_col = header.index("name")
-    grade_col = header.index("grade")
-    key_col = header.index("key")
-    data = users[1:] if len(users) > 1 else []
+    if text.lower() == "login":
+        user_name, _ = get_user_name_grade(user_id)
+        last_auth_str = get_last_auth(user_id)
+        users = worksheet.get_all_values()
+        header = users[0]
+        user_id_col = header.index("user_id")
+        name_col = header.index("name")
+        grade_col = header.index("grade")
+        key_col = header.index("key")
+        data = users[1:] if len(users) > 1 else []
 
-    # user_id登録済み
-    if user_name:
-        if last_auth_str != "LOGGED_OUT":
+        # user_id登録済み
+        if user_name:
+            if last_auth_str != "LOGGED_OUT":
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text=f"既にあなたは「{user_name}」としてログインしています。")
+                )
+                return
+            user_states[user_id] = {'mode': 'login_confirm', 'name': user_name}
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text=f"既にあなたは「{user_name}」としてログインしています。")
+                TextSendMessage(text=f'「{user_name}」としてログインしますか？（はい／いいえ）')
             )
             return
-        user_states[user_id] = {'mode': 'login_confirm', 'name': user_name}
+
+        # user_id未登録 → 初回登録
+        user_states[user_id] = {'mode': 'login_first', 'step': 1}
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(text=f'「{user_name}」としてログインしますか？（はい／いいえ）')
+            TextSendMessage(
+                text="初回登録です。名前、学年、キーをスペース区切りで入力してください。\n例: 太郎 2 tarou123"
+            )
         )
         return
-
-    # user_id未登録 → 初回登録
-    user_states[user_id] = {'mode': 'login_first', 'step': 1}
-    line_bot_api.reply_message(
-        event.reply_token,
-        TextSendMessage(
-            text="初回登録です。名前、学年、キーをスペース区切りで入力してください。\n例: 太郎 2 tarou123"
-        )
-    )
-    return
-
     
 
     # 4. 各種loginフローの状態管理
