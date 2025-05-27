@@ -283,6 +283,86 @@ def check_suspend(user_id):
                 return (False, None, None, None)
     return (False, None, None, None)
 
+def get_user_row_by_name(name):
+    users = worksheet.get_all_values()
+    header = users[0]
+    name_col = header.index("name")
+    for i, row in enumerate(users[1:], start=2):
+        if row[name_col] == name:
+            return i, row
+    return None, None
+
+def is_admin(user_id):
+    users = worksheet.get_all_values()
+    header = users[0]
+    user_id_col = header.index("user_id")
+    admin_col = header.index("admin")
+    for row in users[1:]:
+        if row[user_id_col] == user_id and row[admin_col].isdigit():
+            return True
+    return False
+
+def is_head_admin(user_id):
+    users = worksheet.get_all_values()
+    header = users[0]
+    user_id_col = header.index("user_id")
+    admin_col = header.index("admin")
+    for row in users[1:]:
+        if row[user_id_col] == user_id and row[admin_col] == "1":
+            return True
+    return False
+
+def get_help_message(user_id):
+    if is_head_admin(user_id):
+        return (
+            "あなたは1番管理者です。\n"
+            "“add idt”で任意の選手のIDT記録を追加できます。\n"
+            "入力形式: 名前 学年 タイム 性別(m/w)\n"
+            "例: 太郎 2 7:32.8 m\n"
+            "“admin add”で選手記録を管理者として追加（詳細機能）\n"
+            "“admin approve <名前>”で管理者昇格承認（1番管理者のみ）\n"
+            "“stop responding to <ユーザ名> for <時間> time because you did <理由>”で一時停止（1番管理者のみ）"
+        )
+    elif is_admin(user_id):
+        return (
+            "あなたは管理者（マネージャー）アカウントです。\n"
+            "“add idt”で任意の選手のIDT記録を追加できます。\n"
+            "入力形式: 名前 学年 タイム 性別(m/w)\n"
+            "例: 太郎 2 7:32.8 m\n"
+            "“admin add”で選手記録を管理者として追加（詳細機能）"
+        )
+    else:
+        return (
+            "“login”でログインができます(記録の記入時に必須)\n"
+            "“cal idt”でIDTの計算ができます(ログイン不要)\n"
+            "“add idt”で自分のIDT記録を入力できます(ログイン必須)。例: 7:32.8 m\n"
+            "“admin request”で管理者申請\n"
+        )
+
+def check_suspend(user_id):
+    rows = suspend_sheet.get_all_values()
+    if not rows or len(rows) < 2:
+        return False, None, None, None
+    header = rows[0]
+    if "user_id" not in header or "until" not in header or "reason" not in header:
+        return False, None, None, None
+    user_id_col = header.index("user_id")
+    until_col = header.index("until")
+    reason_col = header.index("reason")
+    now = jst_now()
+    for i, row in enumerate(rows[1:], start=2):
+        if row[user_id_col] == user_id:
+            try:
+                until_time = datetime.datetime.strptime(row[until_col], "%Y/%m/%d %H:%M").replace(tzinfo=pytz.timezone('Asia/Tokyo'))
+            except Exception:
+                continue
+            if now < until_time:
+                return (True, (until_time - now), row[reason_col], i)
+            else:
+                suspend_sheet.delete_rows(i)
+                return (False, None, None, None)
+    return (False, None, None, None)
+
 @app.route("/callback", methods=["POST"])
 def callback():
     signature = request.headers["X-Line-Signature"]
@@ -308,12 +388,24 @@ def handle_message(event):
         )
         return
 
+    # logoutコマンド（追加）
+    if text.lower() == "logout":
+        set_last_auth(user_id, "LOGGED_OUT")
+        if user_id in user_states:
+            user_states.pop(user_id)
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text="ログアウトしました。再度利用するにはloginしてください。")
+        )
+        return
+
+    # 自動ログアウト処理を1時間へ変更。adminは無限ログイン
     if not is_admin(user_id):
         last_auth_str = get_last_auth(user_id)
         if last_auth_str == "LOGGED_OUT":
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text="10分間操作がなかったため自動ログアウトしました。再度ログインしてください。")
+                TextSendMessage(text="1時間操作がなかったため自動ログアウトしました。再度ログインしてください。")
             )
             return
         elif last_auth_str:
@@ -328,11 +420,13 @@ def handle_message(event):
                 now = datetime.datetime.now(pytz.timezone('Asia/Tokyo'))
                 if last_auth_dt.tzinfo is None:
                     last_auth_dt = pytz.timezone('Asia/Tokyo').localize(last_auth_dt)
-                if (now - last_auth_dt).total_seconds() > 600:
+                if (now - last_auth_dt).total_seconds() > 3600:
                     set_last_auth(user_id, "LOGGED_OUT")
+                    if user_id in user_states:
+                        user_states.pop(user_id)
                     line_bot_api.reply_message(
                         event.reply_token,
-                        TextSendMessage(text="10分間操作がなかったため自動ログアウトしました。再度ログインしてください。")
+                        TextSendMessage(text="1時間操作がなかったため自動ログアウトしました。再度ログインしてください。")
                     )
                     return
             set_last_auth(user_id, now_str())
