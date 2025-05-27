@@ -420,7 +420,7 @@ if text.lower() == "logout":
             event.reply_token,
             TextSendMessage(text="ログアウト処理中にエラーが発生しました。管理者に連絡してください。")
         )
-    return
+        return
 
     # cal idtはログイン不要で利用可（特例）
     if text.lower() == "cal idt":
