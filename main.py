@@ -385,7 +385,9 @@ def handle_message(event):
         hours = delta.total_seconds() / 3600
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(text=f"あなたは「{reason}」をしたので、あと{hours:.1f}時間（{mins}分）の間Botからの応答が制限されます。")
+            TextSendMessage(
+                text=f"あなたは「{reason}」をしたので、あと{hours:.1f}時間（{mins}分）の間Botからの応答が制限されます。"
+            )
         )
         return
 
@@ -428,6 +430,7 @@ def handle_message(event):
         )
         return
 
+    # ----- ここが抜けていたloginフロー -----
     if text.lower() == "login":
         user_name, _ = get_user_name_grade(user_id)
         last_auth_str = get_last_auth(user_id)
@@ -439,6 +442,7 @@ def handle_message(event):
         key_col = header.index("key")
         data = users[1:] if len(users) > 1 else []
 
+        # user_id登録済み
         if user_name:
             if last_auth_str != "LOGGED_OUT":
                 line_bot_api.reply_message(
@@ -462,24 +466,17 @@ def handle_message(event):
             )
         )
         return
+    # ----- loginフローここまで -----
 
     # 3. 自動ログアウト判定
     if not is_admin(user_id):
         last_auth_str = get_last_auth(user_id)
         if last_auth_str == "LOGGED_OUT":
-             line_bot_api.reply_message()
-                event.reply_token,
-            if text.lower() not in ["login", "cal idt"]:
-                TextSendMessage(text="1時間操作がなかったため自動ログアウトしました。再度ログインしてください。")
-                line_bot_api.reply_message(
-            )
-                    event.reply_token,
-            return
             # cal idtとlogin以外は受け付けない
             if text.lower() not in ["login", "cal idt"]:
                 line_bot_api.reply_message(
                     event.reply_token,
-                    TextSendMessage(text="ログインしていません。loginでログインしてください。")
+                    TextSendMessage(text="1時間操作がなかったため自動ログアウトしました。再度ログインしてください。")
                 )
                 return
         elif last_auth_str:
@@ -504,8 +501,8 @@ def handle_message(event):
                     )
                     return
             set_last_auth(user_id, now_str())
-
- if text.lower() == "login":
+            
+        if text.lower() == "login":
         user_name, _ = get_user_name_grade(user_id)
         last_auth_str = get_last_auth(user_id)
         users = worksheet.get_all_values()
@@ -541,6 +538,7 @@ def handle_message(event):
         )
         return
 
+    
 
     # 4. 各種loginフローの状態管理
     if user_id in user_states and user_states[user_id].get('mode') == 'login_confirm':
@@ -612,7 +610,6 @@ def handle_message(event):
             )
         return
 
-
     # アカウント切替（乗っ取り防止）フロー
     if user_id in user_states and user_states[user_id].get('mode') == 'login_switch':
         parts = text.strip().split(" ")
@@ -660,6 +657,8 @@ def handle_message(event):
                 TextSendMessage(text="該当するユーザーが見つかりません。情報を確認してください。")
             )
             return
+
+
 
     # アカウント切替 本人確認
     if user_id in user_states and user_states[user_id].get('mode') == 'login_switch_confirm':
