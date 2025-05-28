@@ -550,7 +550,8 @@ if not is_admin(user_id):
                 event.reply_token,
                 TextSendMessage(text="1時間操作がなかったため自動ログアウトしました。再度ログインしてください。")
             )
-            return
+        return
+        
     elif last_auth_str:
         try:
             last_auth_dt = datetime.datetime.fromisoformat(last_auth_str)
