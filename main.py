@@ -431,120 +431,135 @@ def handle_message(event):
         )
         return
 
-    # 4. login 処理
-    if text.lower() == "login":
-        try:
-            user_name, _ = get_user_name_grade(user_id)
-            last_auth_str = get_last_auth(user_id)
-            users = worksheet.get_all_values()
-            header = users[0]
-            user_id_col = header.index("user_id")
-            name_col = header.index("name")
-            grade_col = header.index("grade")
-            key_col = header.index("key")
-            data = users[1:] if len(users) > 1 else []
+# 4. login 処理
+if text.lower() == "login":
+    try:
+        user_name, _ = get_user_name_grade(user_id)
+        last_auth_str = get_last_auth(user_id)
+        users = worksheet.get_all_values()
+        header = users[0]
+        user_id_col = header.index("user_id")
+        name_col = header.index("name")
+        grade_col = header.index("grade")
+        key_col = header.index("key")
+        data = users[1:] if len(users) > 1 else []
 
-            if user_name:
-                if last_auth_str != "LOGGED_OUT":
-                    line_bot_api.reply_message(
-                        event.reply_token,
-                        TextSendMessage(text=f"既にあなたは「{user_name}」としてログインしています。")
-                    )
-                    return
-                user_states[user_id] = {'mode': 'login_confirm', 'name': user_name}
+        if user_name:
+            if last_auth_str != "LOGGED_OUT":
                 line_bot_api.reply_message(
                     event.reply_token,
-                    TextSendMessage(text=f'「{user_name}」としてログインしますか？（はい／いいえ）')
+                    TextSendMessage(text=f"既にあなたは「{user_name}」としてログインしています。")
                 )
                 return
-
-            user_states[user_id] = {'mode': 'login_first', 'step': 1}
+            user_states[user_id] = {'mode': 'login_confirm', 'name': user_name}
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(
-                    text="初回登録です。名前、学年、キーをスペース区切りで入力してください。\n例: 太郎 2 tarou123"
-                )
+                TextSendMessage(text=f'「{user_name}」としてログインしますか？（はい／いいえ）')
             )
             return
 
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="ログイン処理中にエラーが発生しました。管理者に連絡してください。")
+        # 初回登録フローへ
+        user_states[user_id] = {'mode': 'login_first', 'step': 1}
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(
+                text="初回登録です。名前、学年、キーをスペース区切りで入力してください。\n例: 太郎 2 tarou123"
             )
+        )
         return
 
-    # 5. 自動ログアウト判定
-    if not is_admin(user_id):
-        last_auth_str = get_last_auth(user_id)
-        if last_auth_str == "LOGGED_OUT":
-            if text.lower() not in ["login", "cal idt"]:
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text="ログイン処理中にエラーが発生しました。管理者に連絡してください。")
+        )
+    return
+
+# 5. 自動ログアウト判定
+if not is_admin(user_id):
+    last_auth_str = get_last_auth(user_id)
+    if last_auth_str == "LOGGED_OUT":
+        if text.lower() not in ["login", "cal idt"]:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="1時間操作がなかったため自動ログアウトしました。再度ログインしてください。")
+            )
+            return
+    elif last_auth_str:
+        try:
+            last_auth_dt = datetime.datetime.fromisoformat(last_auth_str)
+        except:
+            try:
+                last_auth_dt = datetime.datetime.strptime(last_auth_str, "%Y-%m-%d %H:%M:%S.%f")
+            except:
+                last_auth_dt = None
+        if last_auth_dt:
+            now = datetime.datetime.now(pytz.timezone('Asia/Tokyo'))
+            if last_auth_dt.tzinfo is None:
+                last_auth_dt = pytz.timezone('Asia/Tokyo').localize(last_auth_dt)
+            if (now - last_auth_dt).total_seconds() > 3600:
+                set_last_auth(user_id, "LOGGED_OUT")
+                if user_id in user_states:
+                    user_states.pop(user_id)
                 line_bot_api.reply_message(
                     event.reply_token,
                     TextSendMessage(text="1時間操作がなかったため自動ログアウトしました。再度ログインしてください。")
                 )
                 return
-        elif last_auth_str:
-            try:
-                last_auth_dt = datetime.datetime.fromisoformat(last_auth_str)
-            except:
-                try:
-                    last_auth_dt = datetime.datetime.strptime(last_auth_str, "%Y-%m-%d %H:%M:%S.%f")
-                except:
-                    last_auth_dt = None
-            if last_auth_dt:
-                now = datetime.datetime.now(pytz.timezone('Asia/Tokyo'))
-                if last_auth_dt.tzinfo is None:
-                    last_auth_dt = pytz.timezone('Asia/Tokyo').localize(last_auth_dt)
-                if (now - last_auth_dt).total_seconds() > 3600:
-                    set_last_auth(user_id, "LOGGED_OUT")
-                    if user_id in user_states:
-                        user_states.pop(user_id)
-                    line_bot_api.reply_message(
-                        event.reply_token,
-                        TextSendMessage(text="1時間操作がなかったため自動ログアウトしました。再度ログインしてください。")
-                    )
-                    return
-            set_last_auth(user_id, now_str())
+        set_last_auth(user_id, now_str())
 
-    # 6. login_first モード（初回登録）
-    if user_id in user_states and user_states[user_id].get('mode') == 'login_first':
-        try:
-            parts = text.split()
-            if len(parts) != 3:
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text="形式が正しくありません。名前、学年、キーをスペース区切りで入力してください。\n例: 太郎 2 tarou123")
-                )
-                return
+# 6. login_first モード（初回登録）
+if user_id in user_states and user_states[user_id].get('mode') == 'login_first':
+    try:
+        parts = text.split()
+        if len(parts) != 3:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="形式が正しくありません。名前、学年、キーをスペース区切りで入力してください。\n例: 太郎 2 tarou123")
+            )
+            return
 
-            name, grade, key = parts
+        name, grade, key = parts
 
-            if not grade.isdigit():
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text="学年は半角数字で入力してください。")
-                )
-                return
+        if not grade.isdigit():
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="学年は半角数字で入力してください。")
+            )
+            return
 
-            # ユーザー登録処理
-            worksheet.append_row([name, grade, key, user_id, now_str()])
-            set_last_auth(user_id, now_str())
+        # ユーザー登録処理（重複防止用に既存データをリロード）
+        users = worksheet.get_all_values()
+        header = users[0]
+        user_ids = [row[header.index("user_id")] for row in users[1:]]
+
+        if user_id in user_ids:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="すでに登録されています。ログインしてください。")
+            )
             user_states.pop(user_id)
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text=f"登録が完了しました。「{name}」としてログインしました。")
-            )
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="初回登録中にエラーが発生しました。管理者に連絡してください。")
-            )
-        return
+            return
+
+        worksheet.append_row([name, grade, key, user_id, now_str()])
+        set_last_auth(user_id, now_str())
+        user_states.pop(user_id)
+
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=f"登録が完了しました。「{name}」としてログインしました。")
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text="初回登録中にエラーが発生しました。管理者に連絡してください。")
+        )
+    return
+
 
 
     # 4. 各種loginフローの状態管理
