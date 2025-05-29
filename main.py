@@ -536,7 +536,8 @@ if not is_admin(user_id):
             event.reply_token,
             TextSendMessage(text="1時間操作がなかったため自動ログアウトしました。再度ログインしてください。")
         )
-        return
+    return
+        
     set_last_auth(user_id, now_str())
 
 # 8. login_first モード（初回登録）
