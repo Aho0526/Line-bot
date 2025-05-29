@@ -551,42 +551,26 @@ if user_id in user_states and user_states[user_id].get('mode') == 'login_first':
         return
 
     name, grade, key = parts
-    users = worksheet.get_all_values()
-    header = users[0]
-    name_col = header.index("name")
-    grade_col = header.index("grade")
-    key_col = header.index("key")
-    user_id_col = header.index("user_id")
-    last_auth_col = header.index("last_auth")
-    admin_col = header.index("admin")
-
-    for row in users[1:]:
-        if row[name_col] == name and row[grade_col] == grade:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="既に同じ名前と学年のユーザーが登録されています。管理者に相談してください。")
-            )
-            return
 
     try:
-        new_row = [""] * len(header)
-        new_row[name_col] = name
-        new_row[grade_col] = grade
-        new_row[key_col] = key
-        new_row[user_id_col] = user_id
-        new_row[last_auth_col] = now_str()
-        new_row[admin_col] = ""
-        worksheet.append_row(new_row, value_input_option="USER_ENTERED")
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text="初回登録が完了しました。ログイン成功です。")
-        )
-        user_states.pop(user_id)
-
         # ユーザー登録処理（重複防止用に既存データをリロード）
         users = worksheet.get_all_values()
         header = users[0]
-        user_ids = [row[header.index("user_id")] for row in users[1:]]
+        name_col = header.index("name")
+        grade_col = header.index("grade")
+        key_col = header.index("key")
+        user_id_col = header.index("user_id")
+        last_auth_col = header.index("last_auth")
+        admin_col = header.index("admin") if "admin" in header else None
+
+        user_ids = [row[user_id_col] for row in users[1:]]
+        for row in users[1:]:
+            if row[name_col] == name and row[grade_col] == grade:
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text="既に同じ名前と学年のユーザーが登録されています。管理者に相談してください。")
+                )
+                return
 
         if user_id in user_ids:
             line_bot_api.reply_message(
@@ -596,7 +580,17 @@ if user_id in user_states and user_states[user_id].get('mode') == 'login_first':
             user_states.pop(user_id)
             return
 
-        worksheet.append_row([name, grade, key, user_id, now_str()])
+        # 新しい行の作成
+        new_row = [""] * len(header)
+        new_row[name_col] = name
+        new_row[grade_col] = grade
+        new_row[key_col] = key
+        new_row[user_id_col] = user_id
+        new_row[last_auth_col] = now_str()
+        if admin_col is not None:
+            new_row[admin_col] = ""
+
+        worksheet.append_row(new_row, value_input_option="USER_ENTERED")
         set_last_auth(user_id, now_str())
         user_states.pop(user_id)
 
@@ -604,6 +598,7 @@ if user_id in user_states and user_states[user_id].get('mode') == 'login_first':
             event.reply_token,
             TextSendMessage(text=f"登録が完了しました。「{name}」としてログインしました。")
         )
+        return
 
     except Exception as e:
         import traceback
@@ -612,7 +607,7 @@ if user_id in user_states and user_states[user_id].get('mode') == 'login_first':
             event.reply_token,
             TextSendMessage(text="初回登録中にエラーが発生しました。管理者に連絡してください。")
         )
-    return
+        return
 
 
     # 9. login_confirm モード
