@@ -410,7 +410,16 @@ def handle_message(event):
             )
         return
 
-    # 3. IDTモード処理（ログイン不要）
+    # 3. helpコマンド（いつでも受付）
+    if text.lower() == "help":
+        help_msg = get_help_message(user_id)
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=help_msg)
+        )
+        return
+
+    # 4. IDTモード処理（ログイン不要）
     if text.lower() == "cal idt":
         if is_admin(user_id):
             line_bot_api.reply_message(
@@ -431,7 +440,7 @@ def handle_message(event):
         )
         return
 
-    # 4. login 処理
+    # 5. login 処理
     if text.lower() == "login":
         user_name, _ = get_user_name_grade(user_id)
         last_auth_str = get_last_auth(user_id)
@@ -466,16 +475,45 @@ def handle_message(event):
         )
         return
 
-    # 5. 自動ログアウト判定
-    if not is_admin(user_id):
-        last_auth_str = get_last_auth(user_id)
-        if last_auth_str == "LOGGED_OUT":
-            if text.lower() not in ["login", "cal idt"]:
+    # 6. add idtコマンド（admin/user両方）
+    if re.match(r"^add idt($|[\s　])", text, re.I):
+        if is_admin(user_id):
+            user_states[user_id] = {"mode": "add_idt_admin"}
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(
+                    text="管理者記録追加モードです。対象の選手「名前 学年 タイム 性別(m/w)」を半角スペース区切りで入力してください。\n例: 太郎 2 7:32.8 m"
+                )
+            )
+        else:
+            users = worksheet.get_all_values()
+            header = users[0]
+            data = users[1:]
+            user_id_col = header.index("user_id")
+            is_logged_in = any(row[user_id_col] == user_id for row in data)
+            if not is_logged_in:
                 line_bot_api.reply_message(
                     event.reply_token,
-                    TextSendMessage(text="1時間操作がなかったため自動ログアウトしました。再度ログインしてください。")
+                    TextSendMessage(text="IDT記録の入力にはログインが必要です。“login”でログインしてください。")
                 )
-            return
+                return
+            user_states[user_id] = {"mode": "add_idt_user"}
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(
+                    text="IDT記録追加モードです。タイム・性別を半角スペース区切りで入力してください。\n例: 7:32.8 m"
+                )
+            )
+        return
+
+    # 7. 自動ログアウト判定（必ずhelp/add idt等より後）
+    if not is_admin(user_id):
+        last_auth_str = get_last_auth(user_id)
+        now = datetime.datetime.now(pytz.timezone('Asia/Tokyo'))
+
+        should_logout = False
+        if last_auth_str == "LOGGED_OUT":
+            should_logout = True
         elif last_auth_str:
             try:
                 last_auth_dt = datetime.datetime.fromisoformat(last_auth_str)
@@ -485,94 +523,24 @@ def handle_message(event):
                 except:
                     last_auth_dt = None
             if last_auth_dt:
-                now = datetime.datetime.now(pytz.timezone('Asia/Tokyo'))
                 if last_auth_dt.tzinfo is None:
                     last_auth_dt = pytz.timezone('Asia/Tokyo').localize(last_auth_dt)
                 if (now - last_auth_dt).total_seconds() > 3600:
                     set_last_auth(user_id, "LOGGED_OUT")
                     if user_id in user_states:
                         user_states.pop(user_id)
-                    line_bot_api.reply_message(
-                        event.reply_token,
-                        TextSendMessage(text="1時間操作がなかったため自動ログアウトしました。再度ログインしてください。")
-                    )
-                    return
-            set_last_auth(user_id, now_str())
+                    should_logout = True
 
-    # 6. login_first モード（初回登録）
-    if user_id in user_states and user_states[user_id].get('mode') == 'login_first':
-        try:
-            parts = text.split()
-            if len(parts) != 3:
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text="形式が正しくありません。名前、学年、キーをスペース区切りで入力してください。\n例: 太郎 2 tarou123")
-                )
-                return
-
-            name, grade, key = parts
-
-            if not grade.isdigit():
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text="学年は半角数字で入力してください。")
-                )
-                return
-
-            # ユーザー登録処理（重複防止用に既存データをリロード）
-            users = worksheet.get_all_values()
-            header = users[0]
-            user_ids = [row[header.index("user_id")] for row in users[1:]]
-
-            if user_id in user_ids:
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text="すでに登録されています。ログインしてください。")
-                )
-                user_states.pop(user_id)
-                return
-
-            worksheet.append_row([name, grade, key, user_id, now_str()])
-            set_last_auth(user_id, now_str())
-            user_states.pop(user_id)
-
+        if should_logout:
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text=f"登録が完了しました。「{name}」としてログインしました。")
-            )
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="初回登録中にエラーが発生しました。管理者に連絡してください。")
-            )
-        return
-
-    # 4. 各種loginフローの状態管理
-    if user_id in user_states and user_states[user_id].get('mode') == 'login_confirm':
-        if text.lower() in ["はい", "はい。", "yes", "yes.", "y"]:
-            set_last_auth(user_id, now_str())
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text=f"「{user_states[user_id]['name']}」としてログインしました。")
-            )
-            user_states.pop(user_id)
-            return
-        elif text.lower() in ["いいえ", "no", "n"]:
-            user_states[user_id] = {'mode': 'login_switch', 'step': 1}
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="本当に別アカウントでログインする場合は、名前 学年 キー をスペース区切りで入力してください。\n例: 太郎 2 tarou123")
+                TextSendMessage(text="1時間操作がなかったため自動ログアウトしました。再度ログインしてください。")
             )
             return
-        else:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="「はい」または「いいえ」で答えてください。")
-            )
-            return
+        set_last_auth(user_id, now_str())
 
+
+    # 8. login_first モード（初回登録）
     if user_id in user_states and user_states[user_id].get('mode') == 'login_first':
         parts = text.strip().split(" ")
         if len(parts) != 3:
@@ -619,7 +587,62 @@ def handle_message(event):
             )
         return
 
-    # アカウント切替（乗っ取り防止）フロー
+            # ユーザー登録処理（重複防止用に既存データをリロード）
+            users = worksheet.get_all_values()
+            header = users[0]
+            user_ids = [row[header.index("user_id")] for row in users[1:]]
+
+            if user_id in user_ids:
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text="すでに登録されています。ログインしてください。")
+                )
+                user_states.pop(user_id)
+                return
+
+            worksheet.append_row([name, grade, key, user_id, now_str()])
+            set_last_auth(user_id, now_str())
+            user_states.pop(user_id)
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=f"登録が完了しました。「{name}」としてログインしました。")
+            )
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="初回登録中にエラーが発生しました。管理者に連絡してください。")
+            )
+        return
+
+    # 9. login_confirm モード
+    if user_id in user_states and user_states[user_id].get('mode') == 'login_confirm':
+        if text.lower() in ["はい", "はい。", "yes", "yes.", "y"]:
+            # 日本時間でlast_auth記録
+            set_last_auth(user_id, now_str())
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=f"「{user_states[user_id]['name']}」としてログインしました。")
+            )
+            user_states.pop(user_id)
+            return
+        elif text.lower() in ["いいえ", "no", "n"]:
+            user_states[user_id] = {'mode': 'login_switch', 'step': 1}
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="本当に別アカウントでログインする場合は、名前 学年 キー をスペース区切りで入力してください。\n例: 太郎 2 tarou123")
+            )
+            return
+        else:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="「はい」または「いいえ」で答えてください。")
+            )
+            return
+
+    # 10. login_switch モード
     if user_id in user_states and user_states[user_id].get('mode') == 'login_switch':
         parts = text.strip().split(" ")
         if len(parts) != 3:
@@ -667,7 +690,7 @@ def handle_message(event):
             )
             return
 
-    # アカウント切替 本人確認
+    # 11. login_switch_confirm モード
     if user_id in user_states and user_states[user_id].get('mode') == 'login_switch_confirm':
         if text.lower() in ["はい", "はい。", "yes", "yes.", "y"]:
             target_user_id = user_states[user_id]['target_user_id']
@@ -707,7 +730,7 @@ def handle_message(event):
             )
             return
 
-    # アカウント切替 OTP認証
+    # 12. login_switch_otp モード
     if user_id in user_states and user_states[user_id].get('mode') == 'login_switch_otp':
         input_otp = text.strip()
         found = False
@@ -746,6 +769,7 @@ def handle_message(event):
                 TextSendMessage(text="認証を開始していません。最初からやり直してください。")
             )
         return
+
 
     #（以降、元のloginフローOTP同意確認、OTP認証、add idt等の分岐処理もすべてこの関数内に記述してください。）
 
