@@ -721,45 +721,46 @@ if user_id in user_states and user_states[user_id].get('mode') == 'login_confirm
             )
             return
 
-    # 12. login_switch_otp モード
-    if user_id in user_states and user_states[user_id].get('mode') == 'login_switch_otp':
-        input_otp = text.strip()
-        found = False
-        for owner_id, otp_info in otp_store.items():
-            if otp_info["requester_id"] == user_id:
-                if otp_info["otp"] == input_otp:
-                    target_row = user_states[user_id]['target_row']
-                    users = worksheet.get_all_values()
-                    header = users[0]
-                    user_id_col = header.index("user_id")
-                    last_auth_col = header.index("last_auth")
-                    worksheet.update_cell(target_row, user_id_col + 1, user_id)
-                    worksheet.update_cell(target_row, last_auth_col + 1, now_str())
-                    line_bot_api.reply_message(
-                        event.reply_token,
-                        TextSendMessage(text="OTP認証に成功しました。アカウントをこの端末に切り替えました。")
-                    )
-                    line_bot_api.push_message(
-                        owner_id,
-                        TextSendMessage(text="確認コードが正しく入力され、端末が切り替わりました。")
-                    )
-                    otp_store.pop(owner_id)
-                    user_states.pop(user_id)
-                    found = True
-                    break
-                else:
-                    line_bot_api.reply_message(
-                        event.reply_token,
-                        TextSendMessage(text="確認コードが正しくありません。再度入力してください。")
-                    )
-                    found = True
-                    break
-        if not found:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="認証を開始していません。最初からやり直してください。")
-            )
-        return
+# 12. login_switch_otp モード
+if user_id in user_states and user_states[user_id].get('mode') == 'login_switch_otp':
+    input_otp = text.strip()
+    found = False
+    for owner_id, otp_info in otp_store.items():
+        if otp_info["requester_id"] == user_id:
+            if otp_info["otp"] == input_otp:
+                target_row = user_states[user_id]['target_row']
+                users = worksheet.get_all_values()
+                header = users[0]
+                user_id_col = header.index("user_id")
+                last_auth_col = header.index("last_auth")
+                worksheet.update_cell(target_row, user_id_col + 1, user_id)
+                worksheet.update_cell(target_row, last_auth_col + 1, now_str())
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text="OTP認証に成功しました。アカウントをこの端末に切り替えました。")
+                )
+                line_bot_api.push_message(
+                    owner_id,
+                    TextSendMessage(text="確認コードが正しく入力され、端末が切り替わりました。")
+                )
+                otp_store.pop(owner_id)
+                user_states.pop(user_id)
+                found = True
+                break
+            else:
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text="確認コードが正しくありません。再度入力してください。")
+                )
+                found = True
+                break
+    if not found:
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text="認証を開始していません。最初からやり直してください。")
+        )
+return 
+
 
 
     #（以降、元のloginフローOTP同意確認、OTP認証、add idt等の分岐処理もすべてこの関数内に記述してください。）
