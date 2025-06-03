@@ -506,38 +506,39 @@ def handle_message(event):
             )
         return
 
-# 7. 自動ログアウト判定（必ずhelp/add idt等より後）
-if not is_admin(user_id):
-    last_auth_str = get_last_auth(user_id)
-    now = datetime.datetime.now(pytz.timezone('Asia/Tokyo'))
+    # 7. 自動ログアウト判定（必ずhelp/add idt等より後）
+    if not is_admin(user_id):
+        last_auth_str = get_last_auth(user_id)
+        now = datetime.datetime.now(pytz.timezone('Asia/Tokyo'))
 
-    should_logout = False
-    if last_auth_str == "LOGGED_OUT":
-        should_logout = True
-    elif last_auth_str:
-        try:
-            last_auth_dt = datetime.datetime.fromisoformat(last_auth_str)
-        except:
+        should_logout = False
+        if last_auth_str == "LOGGED_OUT":
+            should_logout = True
+        elif last_auth_str:
             try:
-                last_auth_dt = datetime.datetime.strptime(last_auth_str, "%Y-%m-%d %H:%M:%S.%f")
+                last_auth_dt = datetime.datetime.fromisoformat(last_auth_str)
             except:
-                last_auth_dt = None
-        if last_auth_dt:
-            if last_auth_dt.tzinfo is None:
-                last_auth_dt = pytz.timezone('Asia/Tokyo').localize(last_auth_dt)
-            if (now - last_auth_dt).total_seconds() > 3600:
-                set_last_auth(user_id, "LOGGED_OUT")
-                if user_id in user_states:
-                    user_states.pop(user_id)
-                should_logout = True
+                try:
+                    last_auth_dt = datetime.datetime.strptime(last_auth_str, "%Y-%m-%d %H:%M:%S.%f")
+                except:
+                    last_auth_dt = None
+            if last_auth_dt:
+                if last_auth_dt.tzinfo is None:
+                    last_auth_dt = pytz.timezone('Asia/Tokyo').localize(last_auth_dt)
+                if (now - last_auth_dt).total_seconds() > 3600:
+                    set_last_auth(user_id, "LOGGED_OUT")
+                    if user_id in user_states:
+                        user_states.pop(user_id)
+                    should_logout = True
 
-    if should_logout:
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text="1時間操作がなかったため自動ログアウトしました。再度ログインしてください。")
-        )
-        return
-    set_last_auth(user_id, now_str())
+        if should_logout:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="1時間操作がなかったため自動ログアウトしました。再度ログインしてください。")
+            )
+            return
+        set_last_auth(user_id, now_str())
+
 
 # 8. login_first モード（初回登録）
 if user_id in user_states and user_states[user_id].get('mode') == 'login_first':
@@ -608,29 +609,31 @@ if user_id in user_states and user_states[user_id].get('mode') == 'login_first':
         )
         return
 
-# 9. login_confirm モード
-if user_id in user_states and user_states[user_id].get('mode') == 'login_confirm':
-    if text.lower() in ["はい", "はい。", "yes", "yes.", "y"]:
-        set_last_auth(user_id, now_str())
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text=f"「{user_states[user_id]['name']}」としてログインしました。")
-        )
-        user_states.pop(user_id)
-        return
-    elif text.lower() in ["いいえ", "no", "n"]:
-        user_states[user_id] = {'mode': 'login_switch', 'step': 1}
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text="本当に別アカウントでログインする場合は、名前 学年 キー をスペース区切りで入力してください。\n例: 太郎 2 tarou123")
-        )
-        return
-    else:
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text="「はい」または「いいえ」で答えてください。")
-        )
-        return
+
+    # 9. login_confirm モード
+    if user_id in user_states and user_states[user_id].get('mode') == 'login_confirm':
+        if text.lower() in ["はい", "はい。", "yes", "yes.", "y"]:
+            # 日本時間でlast_auth記録
+            set_last_auth(user_id, now_str())
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=f"「{user_states[user_id]['name']}」としてログインしました。")
+            )
+            user_states.pop(user_id)
+            return
+        elif text.lower() in ["いいえ", "no", "n"]:
+            user_states[user_id] = {'mode': 'login_switch', 'step': 1}
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="本当に別アカウントでログインする場合は、名前 学年 キー をスペース区切りで入力してください。\n例: 太郎 2 tarou123")
+            )
+            return
+        else:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="「はい」または「いいえ」で答えてください。")
+            )
+            return
 
     # 10. login_switch モード
     if user_id in user_states and user_states[user_id].get('mode') == 'login_switch':
