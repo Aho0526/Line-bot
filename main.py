@@ -33,14 +33,14 @@ creds = Credentials.from_service_account_info(credentials_info, scopes=SCOPES)
 spreadsheet_name = os.environ.get("SPREADSHEET_NAME", "user_database")
 gc = gspread.authorize(creds)
 spreadsheet = gc.open(spreadsheet_name)
-worksheet = spreadsheet.sheet1
+worksheet = spreadsheet.worksheet("users")
 
 IDT_RECORD_URL = os.environ.get("IDT_RECORD_URL", "https://docs.google.com/spreadsheets/d/11ZlpV2yl9aA3gxpS-JhBxgNniaxlDP1NO_4XmpGvg54/edit")
-idt_record_sheet = gc.open_by_url(IDT_RECORD_URL).sheet1
+idt_record_sheet = gc.open_by_url(IDT_RECORD_URL).database
 
 ADMIN_RECORD_URL = os.environ.get("ADMIN_RECORD_URL")
 if ADMIN_RECORD_URL:
-    admin_record_sheet = gc.open_by_url(ADMIN_RECORD_URL).sheet1
+    admin_record_sheet = gc.open_by_url(ADMIN_RECORD_URL).database
 else:
     admin_record_sheet = None
 
