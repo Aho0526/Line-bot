@@ -36,11 +36,11 @@ spreadsheet = gc.open(spreadsheet_name)
 worksheet = spreadsheet.worksheet("users")
 
 IDT_RECORD_URL = os.environ.get("IDT_RECORD_URL", "https://docs.google.com/spreadsheets/d/11ZlpV2yl9aA3gxpS-JhBxgNniaxlDP1NO_4XmpGvg54/edit")
-idt_record_sheet = gc.open_by_url(IDT_RECORD_URL).database
+idt_record_sheet = gc.open_by_url(IDT_RECORD_URL).worksheet("database")
 
 ADMIN_RECORD_URL = os.environ.get("ADMIN_RECORD_URL")
 if ADMIN_RECORD_URL:
-    admin_record_sheet = gc.open_by_url(ADMIN_RECORD_URL).database
+    admin_record_sheet = gc.open_by_url(ADMIN_RECORD_URL).worksheet("database")
 else:
     admin_record_sheet = None
 
