@@ -525,6 +525,23 @@ def handle_message(event):
     # login_confirmフロー
     if user_id in user_states and user_states[user_id].get('mode') == 'login_confirm':
         if text.lower() in ["はい", "はい。", "yes", "yes.", "y"]:
+            # ここで再度シートを確認
+            users = worksheet.get_all_values()
+            header = users[0]
+            user_id_col = header.index("user_id")
+            name_col = header.index("name")
+            found = False
+            for row in users[1:]:
+                if row[user_id_col] == user_id and row[name_col] == user_states[user_id]['name']:
+                    found = True
+                    break
+            if not found:
+                user_states.pop(user_id)
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text="ユーザー情報が見つかりません。再度“login”からやり直してください。")
+                )
+                return
             set_last_auth(user_id, now_str())
             line_bot_api.reply_message(
                 event.reply_token,
