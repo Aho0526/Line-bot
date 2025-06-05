@@ -392,7 +392,48 @@ def handle_message(event):
             )
         )
         return
-
+    # cal idtコマンド（ログイン不要・管理者も利用可）
+    if text.lower().startswith("cal idt"):
+        parts = text.split()
+        if len(parts) != 4:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="形式: cal idt タイム 体重 性別(m/w)\n例: cal idt 7:32.8 56.3 m")
+            )
+            return
+        _, time_str, weight, gender = parts
+        t = parse_time_str(time_str)
+        if not t:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="タイム形式が正しくありません。例: 7:32.8")
+            )
+            return
+        try:
+            weight = float(weight)
+        except Exception:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="体重は数値で入力してください。")
+            )
+            return
+        if gender.lower() not in ("m", "w"):
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="性別は m か w で入力してください。")
+            )
+            return
+        mi, se, sed = t
+        gend = 0.0 if gender.lower() == "m" else 1.0
+        score = calc_idt(mi, se, sed, weight, gend)
+        score_disp = round(score + 1e-8, 2)
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(
+                text=f"IDT計算結果: {score_disp:.2f}%"
+            )
+        )
+        return
     # 2. logout 処理
     if text.lower() == "logout":
         try:
@@ -685,6 +726,30 @@ def handle_message(event):
 
     # add idtコマンド
     if re.match(r"^add idt($|[\s])", text, re.I):
+        users = worksheet.get_all_values()
+        header = users[0]
+        data = users[1:]
+        user_id_col = header.index("user_id")
+        last_auth_col = header.index("last_auth")
+        found_row = None
+        for row in data:
+            if row[user_id_col] == user_id:
+                found_row = row
+                break
+        if not found_row:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="IDT記録の入力にはログインが必要です。“login”でログインしてください。")
+            )
+            return
+        last_auth = found_row[last_auth_col] if len(found_row) > last_auth_col else ""
+        if last_auth == "LOGGED_OUT":
+            user_states[user_id] = {'mode': 'login_confirm', 'name': found_row[header.index("name")]}
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=f"現在ログインしていないので記録することができません。「{found_row[header.index('name')]}」としてログインしますか？（はい／いいえ）")
+            )
+            return
         if is_admin(user_id):
             user_states[user_id] = {"mode": "add_idt_admin"}
             line_bot_api.reply_message(
@@ -694,17 +759,6 @@ def handle_message(event):
                 )
             )
         else:
-            users = worksheet.get_all_values()
-            header = users[0]
-            data = users[1:]
-            user_id_col = header.index("user_id")
-            is_logged_in = any(row[user_id_col] == user_id for row in data)
-            if not is_logged_in:
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text="IDT記録の入力にはログインが必要です。“login”でログインしてください。")
-                )
-                return
             user_states[user_id] = {"mode": "add_idt_user"}
             line_bot_api.reply_message(
                 event.reply_token,
