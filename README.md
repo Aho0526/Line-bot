@@ -1,2 +1,2 @@
 このコードは僕の所属している部活動でLINEを用いて対話型のBotを作るためのコードです。
-全てのコードはChatGPT/GitHub Copilot/BlackboxAIを用いてコーディングしています。
+全てのコードはChatGPT/GitHub Copilotを用いてコーディングしています。
