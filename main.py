@@ -144,7 +144,7 @@ def get_user_name_grade(user_id):
         if len(row) > user_id_col and row[user_id_col] and row[user_id_col] == user_id:
             return row[name_col], row[grade_col]
     return None, None
-    
+
 def get_last_auth(user_id):
     users = worksheet.get_all_values()
     if not users or len(users) < 2:
@@ -255,87 +255,7 @@ def get_help_message(user_id):
         return (
             "“login”でログインができます(記録の記入時に必須)\n"
             "“cal idt”でIDTの計算ができます(ログイン不要)\n"
-            "“add idt”で自分のIDT記録を入力できます(ログイン必須)。例: 7:32.8 m\n"
-            "“admin request”で管理者申請\n"
-        )
-
-def check_suspend(user_id):
-    rows = suspend_sheet.get_all_values()
-    if not rows or len(rows) < 2:
-        return False, None, None, None
-    header = rows[0]
-    if "user_id" not in header or "until" not in header or "reason" not in header:
-        return False, None, None, None
-    user_id_col = header.index("user_id")
-    until_col = header.index("until")
-    reason_col = header.index("reason")
-    now = jst_now()
-    for i, row in enumerate(rows[1:], start=2):
-        if row[user_id_col] == user_id:
-            try:
-                until_time = datetime.datetime.strptime(row[until_col], "%Y/%m/%d %H:%M").replace(tzinfo=pytz.timezone('Asia/Tokyo'))
-            except Exception:
-                continue
-            if now < until_time:
-                return (True, (until_time - now), row[reason_col], i)
-            else:
-                suspend_sheet.delete_rows(i)
-                return (False, None, None, None)
-    return (False, None, None, None)
-
-def get_user_row_by_name(name):
-    users = worksheet.get_all_values()
-    header = users[0]
-    name_col = header.index("name")
-    for i, row in enumerate(users[1:], start=2):
-        if row[name_col] == name:
-            return i, row
-    return None, None
-
-def is_admin(user_id):
-    users = worksheet.get_all_values()
-    header = users[0]
-    user_id_col = header.index("user_id")
-    admin_col = header.index("admin")
-    for row in users[1:]:
-        if row[user_id_col] == user_id and row[admin_col].isdigit():
-            return True
-    return False
-
-def is_head_admin(user_id):
-    users = worksheet.get_all_values()
-    header = users[0]
-    user_id_col = header.index("user_id")
-    admin_col = header.index("admin")
-    for row in users[1:]:
-        if row[user_id_col] == user_id and row[admin_col] == "1":
-            return True
-    return False
-
-def get_help_message(user_id):
-    if is_head_admin(user_id):
-        return (
-            "あなたは1番管理者です。\n"
-            "“add idt”で任意の選手のIDT記録を追加できます。\n"
-            "入力形式: 名前 学年 タイム 性別(m/w)\n"
-            "例: 太郎 2 7:32.8 m\n"
-            "“admin add”で選手記録を管理者として追加（詳細機能）\n"
-            "“admin approve <名前>”で管理者昇格承認（1番管理者のみ）\n"
-            "“stop responding to <ユーザ名> for <時間> time because you did <理由>”で一時停止（1番管理者のみ）"
-        )
-    elif is_admin(user_id):
-        return (
-            "あなたは管理者（マネージャー）アカウントです。\n"
-            "“add idt”で任意の選手のIDT記録を追加できます。\n"
-            "入力形式: 名前 学年 タイム 性別(m/w)\n"
-            "例: 太郎 2 7:32.8 m\n"
-            "“admin add”で選手記録を管理者として追加（詳細機能）"
-        )
-    else:
-        return (
-            "“login”でログインができます(記録の記入時に必須)\n"
-            "“cal idt”でIDTの計算ができます(ログイン不要)\n"
-            "“add idt”で自分のIDT記録を入力できます(ログイン必須)。例: 7:32.8 m\n"
+            "“add idt”で自分のIDT記録を入力できます(ログイン必須)。例: 7:32.8 56.3\n"
             "“admin request”で管理者申請\n"
         )
 
@@ -372,8 +292,6 @@ def callback():
     except InvalidSignatureError:
         abort(400)
     return "OK"
-    
-# ...existing code...
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
@@ -392,6 +310,7 @@ def handle_message(event):
             )
         )
         return
+
     # cal idtコマンド（ログイン不要・管理者も利用可）
     if text.lower().startswith("cal idt"):
         parts = text.split()
@@ -434,6 +353,7 @@ def handle_message(event):
             )
         )
         return
+
     # 2. logout 処理
     if text.lower() == "logout":
         try:
@@ -591,7 +511,7 @@ def handle_message(event):
             user_states.pop(user_id)
             return
         elif text.lower() in ["いいえ", "no", "n"]:
-            user_states[user_id] = {'mode': 'login_switch', 'step': 1}
+            user_states[user_id] = {'mode': 'login_switch'}
             line_bot_api.reply_message(
                 event.reply_token,
                 TextSendMessage(text="ログインしたいアカウントの 学年 名前 キー をスペース区切りで入力してください。\n例: 2 太郎 tarou123")
@@ -604,7 +524,7 @@ def handle_message(event):
             )
             return
 
-    # login_switchフロー（OTP認証開始）
+    # login_switchフロー（OTP認証開始前の確認）
     if user_id in user_states and user_states[user_id].get('mode') == 'login_switch':
         parts = text.strip().split()
         if len(parts) != 3:
@@ -620,7 +540,6 @@ def handle_message(event):
         grade_col = header.index("grade")
         key_col = header.index("key")
         user_id_col = header.index("user_id")
-        last_auth_col = header.index("last_auth")
         found_row = None
         for i, row in enumerate(users[1:], start=2):
             if row[name_col] == name and row[grade_col] == grade and row[key_col] == key:
@@ -629,7 +548,6 @@ def handle_message(event):
         if found_row:
             target_row = found_row[0]
             target_user_id = found_row[1][user_id_col]
-            # 既に同じuser_idならそのままログイン
             if target_user_id == user_id:
                 set_last_auth(user_id, now_str())
                 user_states.pop(user_id)
@@ -638,32 +556,27 @@ def handle_message(event):
                     TextSendMessage(text=f"「{name}」としてログインしました。")
                 )
                 return
-            # OTP生成・送信
-            otp = generate_otp()
-            otp_store[target_user_id] = {
-                "otp": otp,
-                "requester_id": user_id,
-                "name": name,
-                "timestamp": datetime.datetime.now()
-            }
-            line_bot_api.push_message(
-                target_user_id,
-                TextSendMessage(
-                    text=f"{name}があなたのアカウントに対しログインを試みています。\nこの操作があなたのものであれば以下のコードをログイン画面に入力してください。\n確認コード: {otp}"
-                )
-            )
+              # user_idが異なる場合、確認メッセージを送信
             user_states[user_id] = {
-                'mode': 'login_switch_otp',
+                'mode': 'login_switch_confirm',
                 'target_row': target_row,
                 'target_user_id': target_user_id,
                 'name': name,
                 'grade': grade,
-                'key': key
+                'key': key,
+                'otp_start': datetime.datetime.now()
             }
             line_bot_api.reply_message(
                 event.reply_token,
                 TextSendMessage(
-                    text="確認コードを紐づいている端末に送信しました。元の端末でコードを確認して入力してください。"
+                    text=(
+                        "このアカウントは既に別の端末と紐づいています。\n"
+                        "元の端末が手元にない場合は管理者に連絡できます。\n"
+                        "どちらかを選んでください。\n"
+                        "「コードを送信」→元の端末に確認コードを送信\n"
+                        "「管理者に連絡」→1番管理者に連絡\n"
+                        "「いいえ」→どちらも行わない"
+                    )
                 )
             )
             return
@@ -674,57 +587,176 @@ def handle_message(event):
             )
             return
 
-    # login_switch_otpフロー
-    if user_id in user_states and user_states[user_id].get('mode') == 'login_switch_otp':
-        input_otp = text.strip()
-        found = False
-        for owner_id, otp_info in list(otp_store.items()):
-            if otp_info["requester_id"] == user_id:
-                if otp_info["otp"] == input_otp:
-                    target_row = user_states[user_id]['target_row']
-                    users = worksheet.get_all_values()
-                    header = users[0]
-                    user_id_col = header.index("user_id")
-                    last_auth_col = header.index("last_auth")
-                    worksheet.update_cell(target_row, user_id_col + 1, user_id)
-                    worksheet.update_cell(target_row, last_auth_col + 1, now_str())
-                    line_bot_api.reply_message(
-                        event.reply_token,
-                        TextSendMessage(text="OTP認証に成功しました。アカウントをこの端末に切り替えました。")
-                    )
-                    line_bot_api.push_message(
-                        owner_id,
-                        TextSendMessage(text="確認コードが正しく入力され、端末が切り替わりました。")
-                    )
-                    otp_store.pop(owner_id)
-                    user_states.pop(user_id)
-                    found = True
-                    break
-                else:
-                    # OTP不一致時は管理者に通知
-                    admins = [row[header.index("user_id")] for row in users[1:] if "admin" in header and row[header.index("admin")].isdigit()]
-                    for admin_id in admins:
-                        line_bot_api.push_message(
-                            admin_id,
-                            TextSendMessage(
-                                text=f"警告: user_id={user_id} が {owner_id} のアカウントに対して不正なOTPログインを試みました。"
-                            )
-                        )
-                    line_bot_api.reply_message(
-                        event.reply_token,
-                        TextSendMessage(text="確認コードが正しくありません。不正な試行が検知されたため管理者に通知しました。")
-                    )
-                    found = True
-                    break
-        if not found:
+    # login_switch_confirmフロー（選択肢に応じて分岐）
+    if user_id in user_states and user_states[user_id].get('mode') == 'login_switch_confirm':
+        choice = text.strip()
+        state = user_states[user_id]
+        if choice == "コードを送信":
+            # OTP生成・送信
+            otp = generate_otp()
+            otp_store[state['target_user_id']] = {
+                "otp": otp,
+                "requester_id": user_id,
+                "name": state['name'],
+                "timestamp": datetime.datetime.now(),
+                "try_count": 0,
+                "expire": datetime.datetime.now() + datetime.timedelta(minutes=10)
+            }
+            line_bot_api.push_message(
+                state['target_user_id'],
+                TextSendMessage(
+                    text=f"{state['name']}があなたのアカウントに対しログインを試みています。\nこの操作があなたのものであれば以下のコードをログイン画面に入力してください。\n確認コード: {otp}\n（有効期限10分）"
+                )
+            )
+            user_states[user_id]['mode'] = 'login_switch_otp'
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text="認証を開始していません。最初からやり直してください。")
+                TextSendMessage(
+                    text="確認コードを紐づいている端末に送信しました。元の端末でコードを確認して入力してください。"
+                )
             )
-        return
+            return
+        elif choice == "管理者に連絡":
+            number_to_userid = get_admin_number_to_userid()
+            if 1 in number_to_userid:
+                head_admin_id = number_to_userid[1]
+                line_bot_api.push_message(
+                    head_admin_id,
+                    TextSendMessage(
+                        text=f"{state['name']}（学年:{state['grade']}）がアカウント切り替えを希望しています。\n手元に元端末がないため管理者対応が必要です。"
+                    )
+                )
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text="1番管理者に連絡しました。対応をお待ちください。")
+                )
+            else:
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text="1番管理者が見つかりません。管理者に直接連絡してください。")
+                )
+            user_states.pop(user_id)
+            return
+        elif choice == "いいえ":
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="ログイン切り替えをキャンセルしました。")
+            )
+            user_states.pop(user_id)
+            return
+        else:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="「コードを送信」「管理者に連絡」「いいえ」のいずれかで答えてください。")
+            )
+            return
+
+    # login_switch_otpフロー（OTP入力・2回ミスで1時間停止）
+    if user_id in user_states and user_states[user_id].get('mode') == 'login_switch_otp':
+        input_otp = text.strip()
+        state = user_states[user_id]
+        otp_info = otp_store.get(state['target_user_id'])
+        now = datetime.datetime.now()
+        # 有効期限切れ
+        if not otp_info or now > otp_info["expire"]:
+            if otp_info:
+                otp_store.pop(state['target_user_id'])
+            user_states.pop(user_id)
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="このコードは10分経過したため無効になりました。最初からやり直してください。")
+            )
+            return
+        # OTPチェック
+        if input_otp == otp_info["otp"]:
+            # 30分以内かチェック
+            if (now - state['otp_start']).total_seconds() > 1800:
+                otp_store.pop(state['target_user_id'])
+                user_states.pop(user_id)
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text="操作開始から30分経過したため、やり直してください。")
+                )
+                return
+            # アカウント切り替え前の最終確認
+            user_states[user_id]['mode'] = 'login_switch_final_confirm'
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(
+                    text="この操作を行うと元のアカウント（旧端末側）は消失します。\n本当に切り替えてよいですか？（ok/キャンセル）"
+                )
+            )
+            return
+        else:
+            otp_info["try_count"] += 1
+            if otp_info["try_count"] >= 2:
+                # 1時間停止
+                until = (jst_now() + datetime.timedelta(hours=1)).strftime("%Y/%m/%d %H:%M")
+                suspend_sheet.append_row([user_id, until, "OTP2回ミス"])
+                # 管理者に通知
+                number_to_userid = get_admin_number_to_userid()
+                if 1 in number_to_userid:
+                    head_admin_id = number_to_userid[1]
+                    line_bot_api.push_message(
+                        head_admin_id,
+                        TextSendMessage(
+                            text=f"警告: user_id={user_id} が {state['target_user_id']} のアカウントに対して2回OTPミスでログインを試みました。1時間停止処置済み。"
+                        )
+                    )
+                otp_store.pop(state['target_user_id'])
+                user_states.pop(user_id)
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text="確認コードを2回間違えたため、1時間操作を停止します。")
+                )
+                return
+            else:
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text="確認コードが正しくありません。もう一度入力してください。")
+                )
+                return
+
+    # login_switch_final_confirmフロー（本当に切り替えてよいか最終確認）
+    if user_id in user_states and user_states[user_id].get('mode') == 'login_switch_final_confirm':
+        if text.strip().lower() == "ok":
+            state = user_states[user_id]
+            # 30分以内かチェック
+            if (datetime.datetime.now() - state['otp_start']).total_seconds() > 1800:
+                user_states.pop(user_id)
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text="操作開始から30分経過したため、やり直してください。")
+                )
+                return
+            # 元アカウント（旧user_id）の行を削除
+            users = worksheet.get_all_values()
+            header = users[0]
+            user_id_col = header.index("user_id")
+            for i, row in enumerate(users[1:], start=2):
+                if row[user_id_col] == state['target_user_id']:
+                    worksheet.delete_rows(i)
+                    break
+            # 新user_idで情報を引き継ぎ
+            worksheet.update_cell(state['target_row'], user_id_col + 1, user_id)
+            set_last_auth(user_id, now_str())
+            otp_store.pop(state['target_user_id'], None)
+            user_states.pop(user_id)
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="アカウントの切り替えが完了しました。")
+            )
+            return
+        else:
+            user_states.pop(user_id)
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="アカウント切り替えをキャンセルしました。")
+            )
+            return
 
 
-    # add idtコマンド
+     # add idtコマンド
     if re.match(r"^add idt($|[\s])", text, re.I):
         users = worksheet.get_all_values()
         header = users[0]
@@ -744,10 +776,9 @@ def handle_message(event):
             return
         last_auth = found_row[last_auth_col] if len(found_row) > last_auth_col else ""
         if last_auth == "LOGGED_OUT":
-            user_states[user_id] = {'mode': 'login_confirm', 'name': found_row[header.index("name")]}
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text=f"現在ログインしていないので記録することができません。「{found_row[header.index('name')]}」としてログインしますか？（はい／いいえ）")
+                TextSendMessage(text="現在ログインしていないので記録することができません。“login”でログインしてください。")
             )
             return
         if is_admin(user_id):
