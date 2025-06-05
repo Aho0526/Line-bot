@@ -682,6 +682,7 @@ def handle_message(event):
             )
         return
 
+
     # add idtコマンド
     if re.match(r"^add idt($|[\s])", text, re.I):
         if is_admin(user_id):
@@ -689,7 +690,7 @@ def handle_message(event):
             line_bot_api.reply_message(
                 event.reply_token,
                 TextSendMessage(
-                    text="管理者記録追加モードです。対象の選手「名前 学年 タイム 性別(m/w)」を半角スペース区切りで入力してください。\n例: 太郎 2 7:32.8 m"
+                    text="管理者記録追加モードです。対象の選手「名前 学年 タイム 性別(m/w) 体重」を半角スペース区切りで入力してください。\n例: 太郎 2 7:32.8 m 56.3"
                 )
             )
         else:
@@ -708,7 +709,7 @@ def handle_message(event):
             line_bot_api.reply_message(
                 event.reply_token,
                 TextSendMessage(
-                    text="IDT記録追加モードです。タイム・性別を半角スペース区切りで入力してください。\n例: 7:32.8 m"
+                    text="IDT記録追加モードです。タイム・体重を半角スペース区切りで入力してください。\n例: 7:32.8 56.3"
                 )
             )
         return
@@ -716,13 +717,13 @@ def handle_message(event):
     # 管理者によるIDT記録追加
     if user_id in user_states and user_states[user_id].get("mode") == "add_idt_admin":
         parts = text.split(" ")
-        if len(parts) != 4:
+        if len(parts) != 5:
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text="形式が正しくありません。\n名前 学年 タイム 性別 の順でスペース区切りで入力してください。")
+                TextSendMessage(text="形式が正しくありません。\n名前 学年 タイム 性別 体重 の順でスペース区切りで入力してください。\n例: 太郎 2 7:32.8 m 56.3")
             )
             return
-        name, grade, time_str, gender = parts
+        name, grade, time_str, gender, weight = parts
         if gender.lower() not in ("m", "w"):
             line_bot_api.reply_message(
                 event.reply_token,
@@ -736,20 +737,17 @@ def handle_message(event):
                 TextSendMessage(text="タイム形式が正しくありません。例: 7:32.8")
             )
             return
+        try:
+            weight = float(weight)
+        except Exception:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="体重は数値で入力してください。")
+            )
+            return
         mi, se, sed = t
         gend = 0.0 if gender.lower() == "m" else 1.0
-        users = worksheet.get_all_values()
-        header = users[0]
-        name_col = header.index("name")
-        grade_col = header.index("grade")
-        weight_col = header.index("weight") if "weight" in header else None
-        weight = ""
-        for row in users[1:]:
-            if row[name_col] == name and row[grade_col] == grade:
-                if weight_col is not None and len(row) > weight_col:
-                    weight = row[weight_col]
-                break
-        score = calc_idt(mi, se, sed, float(weight) if weight else 0, gend)
+        score = calc_idt(mi, se, sed, weight, gend)
         score_disp = round(score + 1e-8, 2)
         record_time = today_jst_ymd()
         row = [name, grade, gender, record_time, time_str, weight, score_disp]
@@ -769,16 +767,10 @@ def handle_message(event):
         if len(parts) != 2:
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text="形式が正しくありません。\nタイム 性別 の順でスペース区切りで入力してください。")
+                TextSendMessage(text="形式が正しくありません。\nタイム 体重 の順でスペース区切りで入力してください。\n例: 7:32.8 56.3")
             )
             return
-        time_str, gender = parts
-        if gender.lower() not in ("m", "w"):
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="性別は m か w で入力してください。")
-            )
-            return
+        time_str, weight = parts
         t = parse_time_str(time_str)
         if not t:
             line_bot_api.reply_message(
@@ -786,21 +778,38 @@ def handle_message(event):
                 TextSendMessage(text="タイム形式が正しくありません。例: 7:32.8")
             )
             return
+        try:
+            weight = float(weight)
+        except Exception:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="体重は数値で入力してください。")
+            )
+            return
         mi, se, sed = t
-        gend = 0.0 if gender.lower() == "m" else 1.0
-        name, grade = get_user_name_grade(user_id)
+        # ユーザー情報から性別・名前・学年を取得
         users = worksheet.get_all_values()
         header = users[0]
+        user_id_col = header.index("user_id")
         name_col = header.index("name")
         grade_col = header.index("grade")
-        weight_col = header.index("weight") if "weight" in header else None
-        weight = ""
+        gender_col = header.index("gender")
+        name, grade, gender = None, None, None
         for row in users[1:]:
-            if row[name_col] == name and row[grade_col] == grade:
-                if weight_col is not None and len(row) > weight_col:
-                    weight = row[weight_col]
+            if row[user_id_col] == user_id:
+                name = row[name_col]
+                grade = row[grade_col]
+                gender = row[gender_col]
                 break
-        score = calc_idt(mi, se, sed, float(weight) if weight else 0, gend)
+        if not all([name, grade, gender]):
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="ユーザー情報の取得に失敗しました。再度ログインしてください。")
+            )
+            user_states.pop(user_id)
+            return
+        gend = 0.0 if gender.lower() == "m" else 1.0
+        score = calc_idt(mi, se, sed, weight, gend)
         score_disp = round(score + 1e-8, 2)
         record_time = today_jst_ymd()
         row = [name, grade, gender, record_time, time_str, weight, score_disp]
@@ -813,6 +822,7 @@ def handle_message(event):
         )
         user_states.pop(user_id)
         return
+
 
     # ---------- 管理者申請・承認制度 ----------
     if text.lower() == "admin request":
