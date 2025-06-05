@@ -57,7 +57,7 @@ try:
 except gspread.exceptions.WorksheetNotFound:
     admin_request_ban_sheet = user_db_spreadsheet.add_worksheet(title=ADMIN_REQUEST_BAN_SHEET, rows=100, cols=3)
     admin_request_ban_sheet.append_row(["user_id", "until", "last_request_date"])
-    
+
 def get_admin_request_ban(user_id):
     rows = admin_request_ban_sheet.get_all_values()
     if len(rows) < 2:
@@ -104,7 +104,7 @@ def generate_otp():
     return str(random.randint(100000, 999999))
 
 def now_str():
-    return datetime.datetime.now(pytz.timezone('Asia/Tokyo')).isoformat()
+    return datetime.datetime.now(pytz.timezone('Asia/Tokyo')).strftime("%Y/%m/%d %H:%M:%S")
 
 def parse_idt_input(text):
     match = re.match(
