@@ -30,34 +30,34 @@ SCOPES = [
 ]
 creds = Credentials.from_service_account_info(credentials_info, scopes=SCOPES)
 
-spreadsheet_name = os.environ.get("SPREADSHEET_NAME", "user_database")
-gc = gspread.authorize(creds)
-spreadsheet = gc.open(spreadsheet_name)
-worksheet = spreadsheet.worksheet("users")
+# ユーザデータ用スプレッドシートURLで明示的に指定
+USER_DATABASE_URL = "https://docs.google.com/spreadsheets/d/1wZR1Tdupldp0RVOm00QAbE9-muz47unt_WhxagdirFA/"
+user_db_spreadsheet = gspread.authorize(creds).open_by_url(USER_DATABASE_URL)
+worksheet = user_db_spreadsheet.worksheet("users")
 
 IDT_RECORD_URL = os.environ.get("IDT_RECORD_URL", "https://docs.google.com/spreadsheets/d/11ZlpV2yl9aA3gxpS-JhBxgNniaxlDP1NO_4XmpGvg54/edit")
-idt_record_sheet = gc.open_by_url(IDT_RECORD_URL).worksheet("database")
+idt_record_sheet = gspread.authorize(creds).open_by_url(IDT_RECORD_URL).worksheet("database")
 
 ADMIN_RECORD_URL = os.environ.get("ADMIN_RECORD_URL")
 if ADMIN_RECORD_URL:
-    admin_record_sheet = gc.open_by_url(ADMIN_RECORD_URL).worksheet("database")
+    admin_record_sheet = gspread.authorize(creds).open_by_url(ADMIN_RECORD_URL).worksheet("database")
 else:
     admin_record_sheet = None
 
 SUSPEND_SHEET_NAME = os.environ.get("SUSPEND_SHEET_NAME", "suspend_list")
 try:
-    suspend_sheet = gc.open(spreadsheet_name).worksheet(SUSPEND_SHEET_NAME)
+    suspend_sheet = user_db_spreadsheet.worksheet(SUSPEND_SHEET_NAME)
 except gspread.exceptions.WorksheetNotFound:
-    suspend_sheet = gc.open(spreadsheet_name).add_worksheet(title=SUSPEND_SHEET_NAME, rows=100, cols=4)
+    suspend_sheet = user_db_spreadsheet.add_worksheet(title=SUSPEND_SHEET_NAME, rows=100, cols=4)
     suspend_sheet.append_row(["user_id", "until", "reason"])
 
 ADMIN_REQUEST_BAN_SHEET = "admin_request_ban"
 try:
-    admin_request_ban_sheet = gc.open(spreadsheet_name).worksheet(ADMIN_REQUEST_BAN_SHEET)
+    admin_request_ban_sheet = user_db_spreadsheet.worksheet(ADMIN_REQUEST_BAN_SHEET)
 except gspread.exceptions.WorksheetNotFound:
-    admin_request_ban_sheet = gc.open(spreadsheet_name).add_worksheet(title=ADMIN_REQUEST_BAN_SHEET, rows=100, cols=3)
+    admin_request_ban_sheet = user_db_spreadsheet.add_worksheet(title=ADMIN_REQUEST_BAN_SHEET, rows=100, cols=3)
     admin_request_ban_sheet.append_row(["user_id", "until", "last_request_date"])
-
+    
 def get_admin_request_ban(user_id):
     rows = admin_request_ban_sheet.get_all_values()
     if len(rows) < 2:
