@@ -801,11 +801,18 @@ def handle_message(event):
 
     # 管理者によるIDT記録追加
     if user_id in user_states and user_states[user_id].get("mode") == "add_idt_admin":
+        if text.strip().lower() == "end":
+            user_states.pop(user_id)
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="IDT記録追加モードを終了しました。")
+            )
+            return
         parts = text.split(" ")
         if len(parts) != 5:
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text="形式が正しくありません。\n名前 学年 タイム 性別 体重 の順でスペース区切りで入力してください。\n例: 太郎 2 7:32.8 m 56.3")
+                TextSendMessage(text="形式が正しくありません。\n名前 学年 タイム 性別 体重 の順でスペース区切りで入力してください。\n例: 太郎 2 7:32.8 m 56.3\n終了する場合は end と入力してください。")
             )
             return
         name, grade, time_str, gender, weight = parts
@@ -836,23 +843,36 @@ def handle_message(event):
         score_disp = round(score + 1e-8, 2)
         record_time = today_jst_ymd()
         row = [name, grade, gender, record_time, time_str, weight, score_disp]
-        idt_record_sheet.append_row(row, value_input_option="USER_ENTERED")
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(
-                text=f"{name}（学年:{grade}）のIDT記録を追加しました。IDT: {score_disp:.2f}%"
+        try:
+            idt_record_sheet.append_row(row, value_input_option="USER_ENTERED")
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(
+                    text=f"{name}（学年:{grade}）のIDT記録を追加しました。IDT: {score_disp:.2f}%"
+                )
             )
-        )
+        except Exception as e:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=f"記録に失敗しました: {e}")
+            )
         user_states.pop(user_id)
         return
 
     # 一般ユーザによる記録追加
     if user_id in user_states and user_states[user_id].get("mode") == "add_idt_user":
+        if text.strip().lower() == "end":
+            user_states.pop(user_id)
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="IDT記録追加モードを終了しました。")
+            )
+            return
         parts = text.split(" ")
         if len(parts) != 2:
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text="形式が正しくありません。\nタイム 体重 の順でスペース区切りで入力してください。\n例: 7:32.8 56.3")
+                TextSendMessage(text="形式が正しくありません。\nタイム 体重 の順でスペース区切りで入力してください。\n例: 7:32.8 56.3\n終了する場合は end と入力してください。")
             )
             return
         time_str, weight = parts
@@ -872,7 +892,6 @@ def handle_message(event):
             )
             return
         mi, se, sed = t
-        # ユーザー情報から性別・名前・学年を取得
         users = worksheet.get_all_values()
         header = users[0]
         user_id_col = header.index("user_id")
@@ -907,7 +926,6 @@ def handle_message(event):
         )
         user_states.pop(user_id)
         return
-
 
     # ---------- 管理者申請・承認制度 ----------
     if text.lower() == "admin request":
