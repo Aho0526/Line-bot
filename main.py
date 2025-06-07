@@ -931,7 +931,7 @@ def handle_message(event):
             )
         return
 
-    # 管理者によるIDT記録追加
+# 管理者によるIDT記録追加
     if user_id in user_states and user_states[user_id].get("mode") == "add_idt_admin":
         if text.strip().lower() == "end":
             user_states.pop(user_id)
@@ -974,7 +974,8 @@ def handle_message(event):
         score = calc_idt(mi, se, sed, weight, gend)
         score_disp = round(score + 1e-8, 2)
         record_date = today_jst_ymd()
-        row = [name, grade, gender, record_date, time_str, weight, score_disp]
+    # 並び: name,grade,gender,record_date,time,weight,idt,admin
+        row = [name, grade, gender, record_date, time_str, weight, score_disp, "1"]
         try:
             idt_record_sheet.append_row(row, value_input_option="USER_ENTERED")
             line_bot_api.reply_message(
@@ -1048,7 +1049,8 @@ def handle_message(event):
         score = calc_idt(mi, se, sed, weight, gend)
         score_disp = round(score + 1e-8, 2)
         record_date = today_jst_ymd()
-        row = [name, grade, gender, record_date, time_str, weight, score_disp]
+    # 並び: name,grade,gender,record_date,time,weight,idt,admin
+        row = [name, grade, gender, record_date, time_str, weight, score_disp, ""]
         idt_record_sheet.append_row(row, value_input_option="USER_ENTERED")
         line_bot_api.reply_message(
             event.reply_token,
