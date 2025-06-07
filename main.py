@@ -466,7 +466,7 @@ def handle_message(event):
             if row[user_id_col] == user_id:
                 found_row = row
                 break
-            
+
         if found_row:
             user_name = found_row[name_col]
             last_auth = found_row[last_auth_col] if len(found_row) > last_auth_col else ""
@@ -842,6 +842,51 @@ def handle_message(event):
             )
             return
 
+    # アカウント削除コマンド（確認フロー付き）
+    if text.lower() == "delete account":
+        user_states[user_id] = {"mode": "delete_account_confirm"}
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(
+                text="本当にアカウントを削除しますか？（はい／いいえ）\n削除すると全てのデータが失われます。"
+            )
+        )
+        return
+
+    if user_id in user_states and user_states[user_id].get("mode") == "delete_account_confirm":
+        if text.strip().lower() in ["はい", "yes", "はい。", "yes."]:
+            users = worksheet.get_all_values()
+            header = users[0]
+            user_id_col = header.index("user_id")
+            deleted = False
+            for i, row in enumerate(users[1:], start=2):
+                if row[user_id_col] == user_id:
+                    worksheet.delete_rows(i)
+                    deleted = True
+                    break
+            user_states.pop(user_id)
+            if deleted:
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text="アカウントを削除しました。ご利用ありがとうございました。")
+                )
+            else:
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text="アカウントが見つかりませんでした。")
+                )
+        elif text.strip().lower() in ["いいえ", "no", "いいえ。", "no."]:
+            user_states.pop(user_id)
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="アカウント削除をキャンセルしました。")
+            )
+        else:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="「はい」または「いいえ」で答えてください。")
+            )
+        return
 
 # add idtコマンド
     if re.match(r"^add idt($|[\s])", text, re.I):
