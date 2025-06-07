@@ -4,3 +4,7 @@ gspread
 oauth2client
 gunicorn
 pytz
+bs4
+requests
+beautifulsoup4
+
