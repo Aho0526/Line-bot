@@ -442,9 +442,15 @@ def handle_message(event):
             )
         return
 
-    # login処理
+     # login処理
     if text.lower() == "login":
-        users = worksheet.get_all_values()
+        users = worksheet.get_all_values()  # 必ず毎回取得
+        if not users or len(users) < 2:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="ユーザーデータベースが空です。管理者に連絡してください。")
+            )
+            return
         header = users[0]
         user_id_col = header.index("user_id")
         name_col = header.index("name")
@@ -456,14 +462,15 @@ def handle_message(event):
 
         # user_idが既に登録されている場合
         found_row = None
-        for row in data:
+        for row in users[1:]:
             if row[user_id_col] == user_id:
                 found_row = row
                 break
-
+            
         if found_row:
             user_name = found_row[name_col]
             last_auth = found_row[last_auth_col] if len(found_row) > last_auth_col else ""
+            # シートの内容でログイン状態を判定
             if last_auth != "LOGGED_OUT":
                 user_states[user_id] = {'mode': 'login_confirm', 'name': user_name}
                 line_bot_api.reply_message(
@@ -479,7 +486,7 @@ def handle_message(event):
                 )
                 return
         else:
-            # サインアップ処理
+            # サインアップ未登録
             user_states[user_id] = {'mode': 'signup'}
             line_bot_api.reply_message(
                 event.reply_token,
