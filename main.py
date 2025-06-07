@@ -254,6 +254,7 @@ def get_help_message(user_id):
     else:
         return (
             "“login”でログインができます(記録の記入時に必須)\n"
+            "“logout”でログアウトができます\n"
             "“cal idt”でIDTの計算ができます(ログイン不要)\n"
             "“add idt”で自分のIDT記録を入力できます(ログイン必須)。例: 7:32.8 56.3\n"
             "“admin request”で管理者申請\n"
@@ -488,7 +489,6 @@ def handle_message(event):
             )
             return
 
-       # サインアップ処理
     if user_id in user_states and user_states[user_id].get('mode') == 'signup':
         parts = text.strip().split()
         if len(parts) != 4:
@@ -518,14 +518,8 @@ def handle_message(event):
         user_id_col = header.index("user_id")
         last_auth_col = header.index("last_auth")
         admin_col = header.index("admin")
-        gender_col = None
-        if "gender" in header:
-            gender_col = header.index("gender")
-        else:
-            # genderカラムがなければ追加
-            worksheet.update_cell(1, len(header) + 1, "gender")
-            header.append("gender")
-            gender_col = header.index("gender")
+        gender_col = header.index("gender") if "gender" in header else None
+
         # 重複チェック
         for row in users[1:]:
             if row[name_col] == name and row[grade_col] == grade:
@@ -534,6 +528,7 @@ def handle_message(event):
                     TextSendMessage(text="既に同じ名前と学年のユーザーが登録されています。管理者に相談してください。")
                 )
                 return
+
         # カラム順に合わせて辞書からリストを生成
         row_dict = {
             "name": name,
@@ -545,8 +540,22 @@ def handle_message(event):
             "admin": ""
         }
         new_row = [row_dict.get(col, "") for col in header]
-        worksheet.append_row(new_row, value_input_option="USER_ENTERED")
-        set_last_auth(user_id, now_str())
+        try:
+            worksheet.append_row(new_row, value_input_option="USER_ENTERED")
+        except Exception as e:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=f"スプレッドシートへの書き込みに失敗しました: {e}")
+            )
+            return
+        try:
+            set_last_auth(user_id, now_str())
+        except Exception as e:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=f"last_authの更新に失敗しました: {e}")
+            )
+            return
         user_states.pop(user_id)
         line_bot_api.reply_message(
             event.reply_token,
