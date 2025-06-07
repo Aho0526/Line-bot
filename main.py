@@ -12,6 +12,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 import requests
 from bs4 import BeautifulSoup
+import datetime
 
 app = Flask(__name__)
 
@@ -61,25 +62,34 @@ except gspread.exceptions.WorksheetNotFound:
     admin_request_ban_sheet.append_row(["user_id", "until", "last_request_date"])
 
 def get_kochi_tide_table():
-    url = "https://www.data.jma.go.jp/kaiyou/db/tide/suisan/suisan.php?stn=KOCHI"
-    res = requests.get(url)
+    now = datetime.datetime.now()
+    ym = now.strftime("%Y%m")
+    url = "https://www.data.jma.go.jp/kaiyou/db/tide/suisan/suisan.php"
+    payload = {
+        "stn": "KOCHI",
+        "ym": ym,
+        "mode": "1"
+    }
+    res = requests.post(url, data=payload)
     res.encoding = res.apparent_encoding
     soup = BeautifulSoup(res.text, "html.parser")
-    # デバッグ用: 取得したHTMLの一部を表示
-    print(soup.prettify()[:1000])
-    # テーブルを全て取得してみる
     tables = soup.find_all("table")
     if not tables:
         return "潮位データのテーブルが見つかりませんでした。"
-    # 最初のテーブルを使う例
-    table = tables[0]
+    # 2番目のテーブルが潮位データ（2024年6月時点）
+    table = tables[1] if len(tables) > 1 else tables[0]
     rows = table.find_all("tr")
     result = []
-    for row in rows:
+    for row in rows[1:6]:  # 上から5日分だけ表示
         cols = row.find_all("td")
-        if cols:
-            result.append(" | ".join(col.get_text(strip=True) for col in cols))
-    return "\n".join(result[:10]) if result else "潮位データが見つかりませんでした。"
+        if len(cols) >= 6:
+            date = cols[0].get_text(strip=True)
+            high1 = cols[1].get_text(strip=True)
+            high2 = cols[2].get_text(strip=True)
+            low1 = cols[3].get_text(strip=True)
+            low2 = cols[4].get_text(strip=True)
+            result.append(f"{date} 高潮1:{high1} 高潮2:{high2} 低潮1:{low1} 低潮2:{low2}")
+    return "\n".join(result) if result else "潮位データが見つかりませんでした。"
 
 def get_admin_request_ban(user_id):
     rows = admin_request_ban_sheet.get_all_values()
