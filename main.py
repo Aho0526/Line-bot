@@ -345,107 +345,145 @@ def handle_message(event):
             )
         )
         return
-
-# ...existing code...    # cal idtコマンド（add idtと同じ入力形式に変更）
-    if text.lower().startswith("cal idt"):
+# cal idtコマンド
+    if text.lower() == "cal idt":
         users = worksheet.get_all_values()
         header = users[0]
         user_id_col = header.index("user_id")
-        name_col = header.index("name")
-        grade_col = header.index("grade")
-        gender_col = header.index("gender") if "gender" in header else None
-        data = users[1:] if len(users) > 1 else []
+        last_auth_col = header.index("last_auth")
         found_row = None
-        for row in data:
+        for row in users[1:]:
             if row[user_id_col] == user_id:
                 found_row = row
                 break
-
-        # ログイン済みの場合
-        if found_row and found_row[header.index("last_auth")] != "LOGGED_OUT":
-            # 入力形式: cal idt タイム 体重
-            parts = text.split()
-            if len(parts) != 3:
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text="形式: cal idt タイム 体重\n例: cal idt 7:32.8 56.3")
-                )
-                return
-            _, time_str, weight = parts
-            t = parse_time_str(time_str)
-            if not t:
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text="タイム形式が正しくありません。例: 7:32.8")
-                )
-                return
-            try:
-                weight = float(weight)
-            except Exception:
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text="体重は数値で入力してください。")
-                )
-                return
-            gender = found_row[gender_col] if gender_col is not None else None
-            if gender is None or gender.lower() not in ("m", "w"):
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text="ユーザー情報の性別が正しく登録されていません。管理者に連絡してください。")
-                )
-                return
-            gend = 0.0 if gender.lower() == "m" else 1.0
-            mi, se, sed = t
-            score = calc_idt(mi, se, sed, weight, gend)
-            score_disp = round(score + 1e-8, 2)
+        if found_row and found_row[last_auth_col] != "LOGGED_OUT":
+            user_states[user_id] = {"mode": "cal_idt_login"}
             line_bot_api.reply_message(
                 event.reply_token,
                 TextSendMessage(
-                    text=f"IDT計算結果: {score_disp:.2f}%"
+                    text="IDT計算モードです。タイム・体重を半角スペース区切りで入力してください。\n例: 7:32.8 56.3\n終了する場合は end と入力してください。"
                 )
+            )
+        else:
+            user_states[user_id] = {"mode": "cal_idt_guest"}
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(
+                    text="IDT計算モードです。タイム・体重・性別を半角スペース区切りで入力してください。\n例: 7:32.8 56.3 m\n終了する場合は end と入力してください。"
+                )
+            )
+        return
+
+    # cal idt 入力モード（ログイン済み）
+    if user_id in user_states and user_states[user_id].get("mode") == "cal_idt_login":
+        if text.strip().lower() == "end":
+            user_states.pop(user_id)
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="IDT計算モードを終了しました。")
             )
             return
-        else:
-            # 未ログインの場合: cal idt タイム 体重 性別
-            parts = text.split()
-            if len(parts) != 4:
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text="形式: cal idt タイム 体重 性別(m/w)\n例: cal idt 7:32.8 56.3 m")
-                )
-                return
-            _, time_str, weight, gender = parts
-            t = parse_time_str(time_str)
-            if not t:
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text="タイム形式が正しくありません。例: 7:32.8")
-                )
-                return
-            try:
-                weight = float(weight)
-            except Exception:
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text="体重は数値で入力してください。")
-                )
-                return
-            if gender.lower() not in ("m", "w"):
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text="性別は m か w で入力してください。")
-                )
-                return
-            gend = 0.0 if gender.lower() == "m" else 1.0
-            mi, se, sed = t
-            score = calc_idt(mi, se, sed, weight, gend)
-            score_disp = round(score + 1e-8, 2)
+        parts = text.strip().split()
+        if len(parts) != 2:
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(
-                    text=f"IDT計算結果: {score_disp:.2f}%"
-                )
+                TextSendMessage(text="形式が正しくありません。\nタイム 体重 の順でスペース区切りで入力してください。\n例: 7:32.8 56.3\n終了する場合は end と入力してください。")
             )
+            return
+        time_str, weight = parts
+        t = parse_time_str(time_str)
+        if not t:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="タイム形式が正しくありません。例: 7:32.8")
+            )
+            return
+        try:
+            weight = float(weight)
+        except Exception:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="体重は数値で入力してください。")
+            )
+            return
+        # 性別はシートから取得
+        users = worksheet.get_all_values()
+        header = users[0]
+        user_id_col = header.index("user_id")
+        gender_col = header.index("gender")
+        gender = None
+        for row in users[1:]:
+            if row[user_id_col] == user_id:
+                gender = row[gender_col]
+                break
+        if gender is None or gender.lower() not in ("m", "w"):
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="ユーザー情報の性別が正しく登録されていません。管理者に連絡してください。")
+            )
+            return
+        gend = 0.0 if gender.lower() == "m" else 1.0
+        mi, se, sed = t
+        score = calc_idt(mi, se, sed, weight, gend)
+        score_disp = round(score + 1e-8, 2)
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(
+                text=f"IDT計算結果: {score_disp:.2f}%"
+            )
+        )
+        return
+
+    # cal idt 入力モード（未ログイン）
+    if user_id in user_states and user_states[user_id].get("mode") == "cal_idt_guest":
+        if text.strip().lower() == "end":
+            user_states.pop(user_id)
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="IDT計算モードを終了しました。")
+            )
+            return
+        parts = text.strip().split()
+        if len(parts) != 3:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="形式が正しくありません。\nタイム 体重 性別(m/w) の順でスペース区切りで入力してください。\n例: 7:32.8 56.3 m\n終了する場合は end と入力してください。")
+            )
+            return
+        time_str, weight, gender = parts
+        t = parse_time_str(time_str)
+        if not t:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="タイム形式が正しくありません。例: 7:32.8")
+            )
+            return
+        try:
+            weight = float(weight)
+        except Exception:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="体重は数値で入力してください。")
+            )
+            return
+        if gender.lower() not in ("m", "w"):
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="性別は m か w で入力してください。")
+            )
+            return
+        gend = 0.0 if gender.lower() == "m" else 1.0
+        mi, se, sed = t
+        score = calc_idt(mi, se, sed, weight, gend)
+        score_disp = round(score + 1e-8, 2)
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(
+                text=f"IDT計算結果: {score_disp:.2f}%"
+            )
+        )
+        return
+
     # helpコマンド
     if text.lower() == "help":
         msg = get_help_message(user_id)
