@@ -841,8 +841,8 @@ def handle_message(event):
         gend = 0.0 if gender.lower() == "m" else 1.0
         score = calc_idt(mi, se, sed, weight, gend)
         score_disp = round(score + 1e-8, 2)
-        record_time = today_jst_ymd()
-        row = [name, grade, gender, record_time, time_str, weight, score_disp]
+        record_date = today_jst_ymd()
+        row = [name, grade, gender, record_date, time_str, weight, score_disp]
         try:
             idt_record_sheet.append_row(row, value_input_option="USER_ENTERED")
             line_bot_api.reply_message(
@@ -915,13 +915,13 @@ def handle_message(event):
         gend = 0.0 if gender.lower() == "m" else 1.0
         score = calc_idt(mi, se, sed, weight, gend)
         score_disp = round(score + 1e-8, 2)
-        record_time = today_jst_ymd()
-        row = [name, grade, gender, record_time, time_str, weight, score_disp]
+        record_date = today_jst_ymd()
+        row = [name, grade, gender, record_date, time_str, weight, score_disp]
         idt_record_sheet.append_row(row, value_input_option="USER_ENTERED")
         line_bot_api.reply_message(
             event.reply_token,
             TextSendMessage(
-                text=f"あなたのIDT記録を{record_time}に追加しました。IDT: {score_disp:.2f}%"
+                text=f"あなたのIDT記録を{record_date}に追加しました。IDT: {score_disp:.2f}%"
             )
         )
         user_states.pop(user_id)
@@ -1041,7 +1041,7 @@ def handle_message(event):
                             request_user_id,
                             TextSendMessage(
                                 text=(
-                                    "あなたの管理者申請が承認されました。以降、IDT記録など選手向け機能はご利用いただけません。\n"
+                                    "あなたの管理者申請が承認されました。以降、個人のIDT記録など選手向け機能はご利用いただけません。\n"
                                     "Adminアカウントの作成に進みます。\n"
                                     "学年、希望する名前とキーを入力してください。\n"
                                     "入力の順は 学年 名前 キー の順で入力してください。"
@@ -1117,7 +1117,7 @@ def handle_message(event):
         mi, se, sed = t
         score = calc_idt(mi, se, sed, weight, gend)
         score_disp = round(score + 1e-8, 2)
-        record_time = today_jst_ymd()
+        record_date = today_jst_ymd()
         users = worksheet.get_all_values()
         header = users[0]
         name_col = header.index("name")
@@ -1128,12 +1128,12 @@ def handle_message(event):
             )
             user_states.pop(user_id)
             return
-        row = [record_time, name, gender, time_str, weight, score_disp]
+        row = [record_date, name, gender, time_str, weight, score_disp]
         try:
             admin_record_sheet.append_row(row, value_input_option="USER_ENTERED")
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text=f"管理者として{record_time}日付で記録を登録しました。\nIDT: {score_disp:.2f}%")
+                TextSendMessage(text=f"管理者として{record_date}に記録を登録しました。\nIDT: {score_disp:.2f}%")
             )
             user_states.pop(user_id)
         except Exception as e:
