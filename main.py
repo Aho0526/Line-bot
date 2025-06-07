@@ -836,7 +836,7 @@ def handle_message(event):
             return
 
 
-     # add idtコマンド
+# add idtコマンド
     if re.match(r"^add idt($|[\s])", text, re.I):
         users = worksheet.get_all_values()
         header = users[0]
