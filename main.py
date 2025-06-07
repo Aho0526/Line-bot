@@ -10,6 +10,8 @@ from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import gspread
 from google.oauth2.service_account import Credentials
+import requests
+from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 
@@ -57,6 +59,26 @@ try:
 except gspread.exceptions.WorksheetNotFound:
     admin_request_ban_sheet = user_db_spreadsheet.add_worksheet(title=ADMIN_REQUEST_BAN_SHEET, rows=100, cols=3)
     admin_request_ban_sheet.append_row(["user_id", "until", "last_request_date"])
+
+def get_kochi_tide_table():
+    url = "https://www.data.jma.go.jp/kaiyou/db/tide/suisan/suisan.php?stn=KOCHI"
+    res = requests.get(url)
+    res.encoding = res.apparent_encoding
+    soup = BeautifulSoup(res.text, "html.parser")
+    # 潮位表のテーブルを取得
+    table = soup.find("table", {"class": "tbl2"})
+    if not table:
+        return "潮位データが見つかりませんでした。"
+    rows = table.find_all("tr")
+    result = []
+    for row in rows[1:6]:  # 例：上から5行分だけ表示
+        cols = row.find_all("td")
+        if len(cols) >= 3:
+            date = cols[0].get_text(strip=True)
+            high = cols[1].get_text(strip=True)
+            low = cols[2].get_text(strip=True)
+            result.append(f"{date} 高潮: {high}cm 低潮: {low}cm")
+    return "\n".join(result) if result else "潮位データが見つかりませんでした。"
 
 def get_admin_request_ban(user_id):
     rows = admin_request_ban_sheet.get_all_values()
@@ -421,6 +443,17 @@ def handle_message(event):
             TextSendMessage(text=msg)
         )
         return         
+    
+    if text.lower() == "tide":
+        try:
+            msg = get_kochi_tide_table()
+        except Exception as e:
+            msg = f"潮位データの取得に失敗しました: {e}"
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=msg)
+        )
+        return
 
 
     # 2. logout 処理
