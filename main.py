@@ -65,20 +65,21 @@ def get_kochi_tide_table():
     res = requests.get(url)
     res.encoding = res.apparent_encoding
     soup = BeautifulSoup(res.text, "html.parser")
-    # 潮位表のテーブルを取得
-    table = soup.find("table", {"class": "tbl2"})
-    if not table:
-        return "潮位データが見つかりませんでした。"
+    # デバッグ用: 取得したHTMLの一部を表示
+    print(soup.prettify()[:1000])
+    # テーブルを全て取得してみる
+    tables = soup.find_all("table")
+    if not tables:
+        return "潮位データのテーブルが見つかりませんでした。"
+    # 最初のテーブルを使う例
+    table = tables[0]
     rows = table.find_all("tr")
     result = []
-    for row in rows[1:6]:  # 例：上から5行分だけ表示
+    for row in rows:
         cols = row.find_all("td")
-        if len(cols) >= 3:
-            date = cols[0].get_text(strip=True)
-            high = cols[1].get_text(strip=True)
-            low = cols[2].get_text(strip=True)
-            result.append(f"{date} 高潮: {high}cm 低潮: {low}cm")
-    return "\n".join(result) if result else "潮位データが見つかりませんでした。"
+        if cols:
+            result.append(" | ".join(col.get_text(strip=True) for col in cols))
+    return "\n".join(result[:10]) if result else "潮位データが見つかりませんでした。"
 
 def get_admin_request_ban(user_id):
     rows = admin_request_ban_sheet.get_all_values()
