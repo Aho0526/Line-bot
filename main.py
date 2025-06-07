@@ -488,7 +488,7 @@ def handle_message(event):
             )
             return
 
-    # サインアップ処理
+       # サインアップ処理
     if user_id in user_states and user_states[user_id].get('mode') == 'signup':
         parts = text.strip().split()
         if len(parts) != 4:
@@ -534,14 +534,17 @@ def handle_message(event):
                     TextSendMessage(text="既に同じ名前と学年のユーザーが登録されています。管理者に相談してください。")
                 )
                 return
-        new_row = [""] * len(header)
-        new_row[name_col] = name
-        new_row[grade_col] = grade
-        new_row[gender_col] = gender
-        new_row[key_col] = key
-        new_row[user_id_col] = user_id
-        new_row[last_auth_col] = now_str()
-        new_row[admin_col] = ""
+        # カラム順に合わせて辞書からリストを生成
+        row_dict = {
+            "name": name,
+            "grade": grade,
+            "gender": gender,
+            "key": key,
+            "user_id": user_id,
+            "last_auth": now_str(),
+            "admin": ""
+        }
+        new_row = [row_dict.get(col, "") for col in header]
         worksheet.append_row(new_row, value_input_option="USER_ENTERED")
         set_last_auth(user_id, now_str())
         user_states.pop(user_id)
@@ -550,7 +553,7 @@ def handle_message(event):
             TextSendMessage(text=f"登録が完了しました。「{name}」としてログインしました。")
         )
         return
-
+    
     # login_confirmフロー
     if user_id in user_states and user_states[user_id].get('mode') == 'login_confirm':
         if text.lower() in ["はい", "はい。", "yes", "yes.", "y"]:
