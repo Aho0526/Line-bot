@@ -15,7 +15,8 @@ from bs4 import BeautifulSoup
 import datetime
 import traceback
 import io
-from PyPDF2 import PdfReader
+from pdfplumber import open as pdfplumber_open
+from pdfplumber import errors as pdfplumber_errors
 import tempfile
 
 app = Flask(__name__)
@@ -109,30 +110,33 @@ def extract_tide_from_pdf(pdf_filepath: str, target_month: int, target_day: int,
     Extracts the tide level for a specific date and hour from a PDF file.
     """
     try:
-        reader = PdfReader(pdf_filepath)
-        print(f"Debug: Successfully opened PDF with PyPDF2. Total pages: {len(reader.pages)}")
+        # Use the aliased open function for pdfplumber
+        with pdfplumber_open(pdf_filepath) as pdf:
+            print(f"Debug: Successfully opened PDF with pdfplumber. Total pages: {len(pdf.pages)}")
 
-        for i, page_obj in enumerate(reader.pages):
-            try:
-                text = page_obj.extract_text()
-                print(f"--- PyPDF2 Page {i+1} Text (first 300 chars) ---")
-                print(text[:300] if text else "No text found on page with PyPDF2")
-                print("--- End of PyPDF2 Page Sample ---")
-            except Exception as page_e:
-                print(f"Error extracting text from page {i+1} with PyPDF2: {page_e}")
-            if i >= 2: # For initial testing, only try to print text from first 3 pages
-                print("Debug: PyPDF2 processed first few pages for initial text dump.")
-                break 
-        
-        print("Debug: extract_tide_from_pdf (PyPDF2) returning None after attempting text extraction.")
+            for i, page in enumerate(pdf.pages):
+                if i >= 3: # For initial testing, only try to print text from first 3 pages
+                    print("Debug: pdfplumber processed first few pages for initial text dump.")
+                    break
+                try:
+                    text = page.extract_text() # Standard text extraction
+                    print(f"--- pdfplumber Page {i+1} Text (first 300 chars) ---")
+                    print(text[:300] if text else "No text found on page with pdfplumber")
+                    print("--- End of pdfplumber Page Sample ---")
+                except Exception as page_e:
+                    print(f"Error extracting text from page {i+1} with pdfplumber: {page_e}")
+            
+            print("Debug: extract_tide_from_pdf (pdfplumber) returning None after attempting text extraction.")
+            return None
+
+    except pdfplumber_errors.PDFSyntaxError as pse:
+        print(f"PDFSyntaxError during PDF parsing with pdfplumber for {pdf_filepath}: {pse}")
+        traceback.print_exc() # Print full traceback for syntax errors
         return None
-
     except Exception as e:
         # import traceback # traceback is already globally imported
         error_details = traceback.format_exc()
-        # Note: PyPDF2 might have specific exceptions for syntax errors, e.g., from PyPDF2.errors import PdfReadError
-        # For now, general Exception is fine for this debugging phase.
-        print(f"Error during PDF processing with PyPDF2 for {pdf_filepath}: {e}\n{error_details}")
+        print(f"Error during PDF processing with pdfplumber for {pdf_filepath}: {e}\n{error_details}")
         return None
 
 
