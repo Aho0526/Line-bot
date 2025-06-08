@@ -15,7 +15,8 @@ from bs4 import BeautifulSoup
 import datetime
 import traceback
 import io
-import pdfplumber
+from PyPDF2 import PdfReader
+import tempfile
 
 app = Flask(__name__)
 
@@ -64,54 +65,76 @@ except gspread.exceptions.WorksheetNotFound:
     admin_request_ban_sheet = user_db_spreadsheet.add_worksheet(title=ADMIN_REQUEST_BAN_SHEET, rows=100, cols=3)
     admin_request_ban_sheet.append_row(["user_id", "until", "last_request_date"])
 
-def download_tide_pdf(year: int) -> bytes | None:
+def download_tide_pdf(year: int) -> str | None:
     """
     Downloads the hourly tide data PDF for Kochi for a given year.
+    Returns the filepath to the temporary PDF file, or None on failure.
     KC.pdf is the code for Kochi.
     """
     url = f"https://www.data.jma.go.jp/kaiyou/data/db/tide/suisan/pdf_hourly/{year}/KC.pdf"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     }
+    temp_pdf_file = None
     try:
         res = requests.get(url, headers=headers, stream=True)
         if res.status_code == 200:
-            return res.content
+            temp_pdf_file = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf')
+            for chunk in res.iter_content(chunk_size=8192):
+                temp_pdf_file.write(chunk)
+            temp_pdf_file.close()
+            print(f"Debug: PDF downloaded and saved to temporary file: {temp_pdf_file.name}")
+            return temp_pdf_file.name
         else:
             print(f"Error downloading PDF: Status {res.status_code} for URL {url}")
             return None
     except requests.exceptions.RequestException as e:
         print(f"RequestException while downloading PDF from {url}: {e}")
+        if temp_pdf_file: # If temp file was created before exception
+            temp_pdf_file.close()
+            os.remove(temp_pdf_file.name)
         return None
     except Exception as e:
-        print(f"An unexpected error occurred while downloading PDF from {url}: {e}")
+        print(f"An unexpected error occurred while downloading or writing PDF from {url}: {e}")
+        if temp_pdf_file: # If temp file was created before exception
+            temp_pdf_file.close()
+            try:
+                os.remove(temp_pdf_file.name)
+            except OSError: # e.g. if file was not actually created due to error during NamedTemporaryFile call itself
+                pass
         return None
 
-def extract_tide_from_pdf(pdf_bytes: bytes, target_month: int, target_day: int, target_hour: int) -> int | None:
+def extract_tide_from_pdf(pdf_filepath: str, target_month: int, target_day: int, target_hour: int) -> int | None:
     """
-    Extracts the tide level for a specific date and hour from PDF bytes.
+    Extracts the tide level for a specific date and hour from a PDF file.
     """
     try:
-        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-            # Initial Exploration: Print text from each page
-            for i, page in enumerate(pdf.pages):
-                text = page.extract_text()
-                print(f"--- Page {i+1} Text (first 500 chars) ---")
-                print(text[:500] if text else "No text found on page")
-                print("--- End of Page Sample ---")
+        reader = PdfReader(pdf_filepath)
+        print(f"Debug: Successfully opened PDF with PyPDF2. Total pages: {len(reader.pages)}")
 
-            # Placeholder for actual data extraction logic
-            # This will be developed in subsequent steps after analyzing PDF structure
-            print(f"Placeholder: Would search for Month: {target_month}, Day: {target_day}, Hour: {target_hour}")
-            return None # Placeholder return
-
-    except pdfplumber.exceptions.PDFSyntaxError as e:
-        print(f"PDFSyntaxError while parsing PDF: {e}")
+        for i, page_obj in enumerate(reader.pages):
+            try:
+                text = page_obj.extract_text()
+                print(f"--- PyPDF2 Page {i+1} Text (first 300 chars) ---")
+                print(text[:300] if text else "No text found on page with PyPDF2")
+                print("--- End of PyPDF2 Page Sample ---")
+            except Exception as page_e:
+                print(f"Error extracting text from page {i+1} with PyPDF2: {page_e}")
+            if i >= 2: # For initial testing, only try to print text from first 3 pages
+                print("Debug: PyPDF2 processed first few pages for initial text dump.")
+                break 
+        
+        print("Debug: extract_tide_from_pdf (PyPDF2) returning None after attempting text extraction.")
         return None
+
     except Exception as e:
-        import traceback
-        print(f"An unexpected error occurred during PDF parsing: {e}\n{traceback.format_exc()}")
+        # import traceback # traceback is already globally imported
+        error_details = traceback.format_exc()
+        # Note: PyPDF2 might have specific exceptions for syntax errors, e.g., from PyPDF2.errors import PdfReadError
+        # For now, general Exception is fine for this debugging phase.
+        print(f"Error during PDF processing with PyPDF2 for {pdf_filepath}: {e}\n{error_details}")
         return None
+
 
 # def get_kochi_tide_table(): # REMOVED as per new PDF-based flow
 #     now = datetime.datetime.now()
