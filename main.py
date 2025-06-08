@@ -13,6 +13,7 @@ from google.oauth2.service_account import Credentials
 import requests
 from bs4 import BeautifulSoup
 import datetime
+import traceback
 
 app = Flask(__name__)
 
@@ -70,25 +71,49 @@ def get_kochi_tide_table():
         "ym": ym,
         "mode": "1"
     }
-    res = requests.post(url, data=payload)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    }
+    res = requests.post(url, data=payload, headers=headers)
+    print(f"JMA Request Status Code: {res.status_code}")
+    print(f"JMA Response Text Snippet: {res.text[:500]}")
     res.encoding = res.apparent_encoding
     soup = BeautifulSoup(res.text, "html.parser")
     tables = soup.find_all("table")
+    print(f"Number of tables found: {len(tables)}")
     if not tables:
+        # This case is already handled by the print statement from the previous change.
+        # print("No tables found on the page.")
         return "潮位データのテーブルが見つかりませんでした。"
-    # 2番目のテーブルが潮位データ（2024年6月時点）
-    table = tables[1] if len(tables) > 1 else tables[0]
+
+    if len(tables) < 2:
+        # Log the actual number of tables found if it's less than 2
+        error_message = f"潮位データテーブルの数が期待値未満です。テーブル数: {len(tables)}。"
+        if tables: # If there's at least one table, try to use the first one as a fallback
+            print(f"警告: {error_message} 最初のテーブルを使用します。")
+            table = tables[0]
+        else: # No tables found at all (this case should be caught by 'if not tables' above, but as a safeguard)
+             print(f"エラー: {error_message}")
+             return "潮位データのテーブルが期待通りに見つかりませんでした。サイト構成が変更された可能性があります。"
+    else:
+        # 2番目のテーブルが潮位データ（2024年6月時点）
+        table = tables[1]
+
     rows = table.find_all("tr")
     result = []
     for row in rows[1:6]:  # 上から5日分だけ表示
         cols = row.find_all("td")
-        if len(cols) >= 6:
+        if len(cols) >= 5: # Expecting at least 5 columns for date, high1, high2, low1, low2
             date = cols[0].get_text(strip=True)
-            high1 = cols[1].get_text(strip=True)
-            high2 = cols[2].get_text(strip=True)
-            low1 = cols[3].get_text(strip=True)
-            low2 = cols[4].get_text(strip=True)
-            result.append(f"{date} 高潮1:{high1} 高潮2:{high2} 低潮1:{low1} 低潮2:{low2}")
+            high1_text = cols[1].get_text(strip=True) if len(cols) > 1 else "データなし"
+            high2_text = cols[2].get_text(strip=True) if len(cols) > 2 else "データなし"
+            low1_text = cols[3].get_text(strip=True) if len(cols) > 3 else "データなし"
+            low2_text = cols[4].get_text(strip=True) if len(cols) > 4 else "データなし"
+            result.append(f"{date} 高潮1:{high1_text} 高潮2:{high2_text} 低潮1:{low1_text} 低潮2:{low2_text}")
+        else:
+            print(f"警告: 潮位データ行の列数が期待未満です。列数: {len(cols)}。この行をスキップします。Row HTML: {row.prettify()}")
+            # Optionally, append a message indicating missing data for this row
+            # result.append(f"日付不明行: データ不完全 (列数: {len(cols)})")
     return "\n".join(result) if result else "潮位データが見つかりませんでした。"
 
 def get_admin_request_ban(user_id):
@@ -497,7 +522,9 @@ def handle_message(event):
         try:
             msg = get_kochi_tide_table()
         except Exception as e:
-            msg = f"潮位データの取得に失敗しました: {e}"
+            error_details = traceback.format_exc()
+            print(f"ERROR: Unexpected error in get_kochi_tide_table or tide handling: {e}\n{error_details}") # For server logs
+            msg = f"潮位情報の取得中に予期せぬエラーが発生しました。しばらくしてから再試行するか、問題が続く場合は管理者に連絡してください。" # User-facing message
         line_bot_api.reply_message(
             event.reply_token,
             TextSendMessage(text=msg)
@@ -516,7 +543,6 @@ def handle_message(event):
                 TextSendMessage(text="ログアウトしました。再度利用するにはloginしてください。")
             )
         except Exception as e:
-            import traceback
             traceback.print_exc()
             line_bot_api.reply_message(
                 event.reply_token,
