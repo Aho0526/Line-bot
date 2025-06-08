@@ -14,6 +14,8 @@ import requests
 from bs4 import BeautifulSoup
 import datetime
 import traceback
+import io
+import pdfplumber
 
 app = Flask(__name__)
 
@@ -62,59 +64,108 @@ except gspread.exceptions.WorksheetNotFound:
     admin_request_ban_sheet = user_db_spreadsheet.add_worksheet(title=ADMIN_REQUEST_BAN_SHEET, rows=100, cols=3)
     admin_request_ban_sheet.append_row(["user_id", "until", "last_request_date"])
 
-def get_kochi_tide_table():
-    now = datetime.datetime.now()
-    ym = now.strftime("%Y%m")
-    url = "https://www.data.jma.go.jp/kaiyou/db/tide/suisan/suisan.php"
-    payload = {
-        "stn": "KOCHI",
-        "ym": ym,
-        "mode": "1"
-    }
+def download_tide_pdf(year: int) -> bytes | None:
+    """
+    Downloads the hourly tide data PDF for Kochi for a given year.
+    KC.pdf is the code for Kochi.
+    """
+    url = f"https://www.data.jma.go.jp/kaiyou/data/db/tide/suisan/pdf_hourly/{year}/KC.pdf"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     }
-    res = requests.post(url, data=payload, headers=headers)
-    print(f"JMA Request Status Code: {res.status_code}")
-    print(f"JMA Response Text Snippet: {res.text[:500]}")
-    res.encoding = res.apparent_encoding
-    soup = BeautifulSoup(res.text, "html.parser")
-    tables = soup.find_all("table")
-    print(f"Number of tables found: {len(tables)}")
-    if not tables:
-        # This case is already handled by the print statement from the previous change.
-        # print("No tables found on the page.")
-        return "潮位データのテーブルが見つかりませんでした。"
-
-    if len(tables) < 2:
-        # Log the actual number of tables found if it's less than 2
-        error_message = f"潮位データテーブルの数が期待値未満です。テーブル数: {len(tables)}。"
-        if tables: # If there's at least one table, try to use the first one as a fallback
-            print(f"警告: {error_message} 最初のテーブルを使用します。")
-            table = tables[0]
-        else: # No tables found at all (this case should be caught by 'if not tables' above, but as a safeguard)
-             print(f"エラー: {error_message}")
-             return "潮位データのテーブルが期待通りに見つかりませんでした。サイト構成が変更された可能性があります。"
-    else:
-        # 2番目のテーブルが潮位データ（2024年6月時点）
-        table = tables[1]
-
-    rows = table.find_all("tr")
-    result = []
-    for row in rows[1:6]:  # 上から5日分だけ表示
-        cols = row.find_all("td")
-        if len(cols) >= 5: # Expecting at least 5 columns for date, high1, high2, low1, low2
-            date = cols[0].get_text(strip=True)
-            high1_text = cols[1].get_text(strip=True) if len(cols) > 1 else "データなし"
-            high2_text = cols[2].get_text(strip=True) if len(cols) > 2 else "データなし"
-            low1_text = cols[3].get_text(strip=True) if len(cols) > 3 else "データなし"
-            low2_text = cols[4].get_text(strip=True) if len(cols) > 4 else "データなし"
-            result.append(f"{date} 高潮1:{high1_text} 高潮2:{high2_text} 低潮1:{low1_text} 低潮2:{low2_text}")
+    try:
+        res = requests.get(url, headers=headers, stream=True)
+        if res.status_code == 200:
+            return res.content
         else:
-            print(f"警告: 潮位データ行の列数が期待未満です。列数: {len(cols)}。この行をスキップします。Row HTML: {row.prettify()}")
-            # Optionally, append a message indicating missing data for this row
-            # result.append(f"日付不明行: データ不完全 (列数: {len(cols)})")
-    return "\n".join(result) if result else "潮位データが見つかりませんでした。"
+            print(f"Error downloading PDF: Status {res.status_code} for URL {url}")
+            return None
+    except requests.exceptions.RequestException as e:
+        print(f"RequestException while downloading PDF from {url}: {e}")
+        return None
+    except Exception as e:
+        print(f"An unexpected error occurred while downloading PDF from {url}: {e}")
+        return None
+
+def extract_tide_from_pdf(pdf_bytes: bytes, target_month: int, target_day: int, target_hour: int) -> int | None:
+    """
+    Extracts the tide level for a specific date and hour from PDF bytes.
+    """
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            # Initial Exploration: Print text from each page
+            for i, page in enumerate(pdf.pages):
+                text = page.extract_text()
+                print(f"--- Page {i+1} Text (first 500 chars) ---")
+                print(text[:500] if text else "No text found on page")
+                print("--- End of Page Sample ---")
+
+            # Placeholder for actual data extraction logic
+            # This will be developed in subsequent steps after analyzing PDF structure
+            print(f"Placeholder: Would search for Month: {target_month}, Day: {target_day}, Hour: {target_hour}")
+            return None # Placeholder return
+
+    except pdfplumber.exceptions.PDFSyntaxError as e:
+        print(f"PDFSyntaxError while parsing PDF: {e}")
+        return None
+    except Exception as e:
+        import traceback
+        print(f"An unexpected error occurred during PDF parsing: {e}\n{traceback.format_exc()}")
+        return None
+
+# def get_kochi_tide_table(): # REMOVED as per new PDF-based flow
+#     now = datetime.datetime.now()
+#     ym = now.strftime("%Y%m")
+#     url = "https://www.data.jma.go.jp/kaiyou/db/tide/suisan/suisan.php"
+#     payload = {
+#         "stn": "KOCHI",
+#         "ym": ym,
+#         "mode": "1"
+#     }
+#     headers = {
+#         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+#     }
+#     res = requests.post(url, data=payload, headers=headers)
+#     print(f"JMA Request Status Code: {res.status_code}")
+#     print(f"JMA Response Text Snippet: {res.text[:500]}")
+#     res.encoding = res.apparent_encoding
+#     soup = BeautifulSoup(res.text, "html.parser")
+#     tables = soup.find_all("table")
+#     print(f"Number of tables found: {len(tables)}")
+#     if not tables:
+#         # This case is already handled by the print statement from the previous change.
+#         # print("No tables found on the page.")
+#         return "潮位データのテーブルが見つかりませんでした。"
+#
+#     if len(tables) < 2:
+#         # Log the actual number of tables found if it's less than 2
+#         error_message = f"潮位データテーブルの数が期待値未満です。テーブル数: {len(tables)}。"
+#         if tables: # If there's at least one table, try to use the first one as a fallback
+#             print(f"警告: {error_message} 最初のテーブルを使用します。")
+#             table = tables[0]
+#         else: # No tables found at all (this case should be caught by 'if not tables' above, but as a safeguard)
+#              print(f"エラー: {error_message}")
+#              return "潮位データのテーブルが期待通りに見つかりませんでした。サイト構成が変更された可能性があります。"
+#     else:
+#         # 2番目のテーブルが潮位データ（2024年6月時点）
+#         table = tables[1]
+#
+#     rows = table.find_all("tr")
+#     result = []
+#     for row in rows[1:6]:  # 上から5日分だけ表示
+#         cols = row.find_all("td")
+#         if len(cols) >= 5: # Expecting at least 5 columns for date, high1, high2, low1, low2
+#             date = cols[0].get_text(strip=True)
+#             high1_text = cols[1].get_text(strip=True) if len(cols) > 1 else "データなし"
+#             high2_text = cols[2].get_text(strip=True) if len(cols) > 2 else "データなし"
+#             low1_text = cols[3].get_text(strip=True) if len(cols) > 3 else "データなし"
+#             low2_text = cols[4].get_text(strip=True) if len(cols) > 4 else "データなし"
+#             result.append(f"{date} 高潮1:{high1_text} 高潮2:{high2_text} 低潮1:{low1_text} 低潮2:{low2_text}")
+#         else:
+#             print(f"警告: 潮位データ行の列数が期待未満です。列数: {len(cols)}。この行をスキップします。Row HTML: {row.prettify()}")
+#             # Optionally, append a message indicating missing data for this row
+#             # result.append(f"日付不明行: データ不完全 (列数: {len(cols)})")
+#     return "\n".join(result) if result else "潮位データが見つかりませんでした。"
 
 def get_admin_request_ban(user_id):
     rows = admin_request_ban_sheet.get_all_values()
@@ -519,18 +570,71 @@ def handle_message(event):
         return         
     
     if text.lower() == "tide":
-        try:
-            msg = get_kochi_tide_table()
-        except Exception as e:
-            error_details = traceback.format_exc()
-            print(f"ERROR: Unexpected error in get_kochi_tide_table or tide handling: {e}\n{error_details}") # For server logs
-            msg = f"潮位情報の取得中に予期せぬエラーが発生しました。しばらくしてから再試行するか、問題が続く場合は管理者に連絡してください。" # User-facing message
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text=msg)
-        )
+        user_states[user_id] = {"mode": "awaiting_tide_datetime"}
+        reply_text = "潮位を調べる日付と時刻を「月/日 時:分」（例: 6/8 16:00）の形式で教えてください。"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
         return
 
+    elif user_states.get(user_id, {}).get("mode") == "awaiting_tide_datetime":
+        text_input = text.strip()
+        match = re.fullmatch(r"(\d{1,2})/(\d{1,2})\s+(\d{1,2}):(\d{2})", text_input)
+
+        if not match:
+            reply_text = "日付と時刻の形式が正しくありません。「月/日 時:分」（例: 6/8 16:00）の形式で入力してください。"
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
+            return # Keep state for re-entry
+
+        month_str, day_str, hour_str, minute_str = match.groups()
+
+        try:
+            month = int(month_str)
+            day = int(day_str)
+            hour = int(hour_str)
+            # minute = int(minute_str) # minute is not used for extraction logic with extract_tide_from_pdf yet
+
+            # Basic validation
+            # More specific day validation (e.g., days in month) can be added if needed.
+            if not (1 <= month <= 12 and 1 <= day <= 31 and 0 <= hour <= 23):
+                raise ValueError("日付または時刻の範囲が無効です。")
+
+        except ValueError as ve:
+            print(f"Debug: Date/Time validation error for input '{text_input}': {ve}")
+            reply_text = "日付または時刻の範囲が正しくありません。実在する日時を入力してください。（例: 6/8 16:00）"
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
+            user_states.pop(user_id, None) # Clear state on invalid date logic
+            return
+
+        current_year = datetime.datetime.now().year
+        # Attempt to download the PDF for the current year
+        # In a future enhancement, we might need to ask the user for the year if it's not the current one.
+        print(f"User {user_id} requested tide for {current_year}/{month}/{day} {hour}:{minute_str}. Downloading PDF for {current_year}.")
+        pdf_bytes = download_tide_pdf(current_year)
+
+        if pdf_bytes:
+            print(f"PDF for {current_year} downloaded successfully for user {user_id}. Size: {len(pdf_bytes)} bytes. Now extracting tide data.")
+            try:
+                # Pass integer hour for extraction logic
+                tide_value = extract_tide_from_pdf(pdf_bytes, month, day, hour)
+                if tide_value is not None:
+                    reply_text = f"{current_year}年{month}月{day}日 {hour}時{minute_str}分の潮位は {tide_value} cmです。"
+                else:
+                    # This case means extract_tide_from_pdf ran but didn't find the data,
+                    # or it's still in its placeholder state.
+                    reply_text = f"{current_year}年{month}月{day}日 {hour}時{minute_str}分の潮位データは見つかりませんでした。(PDFからの詳細解析処理は開発中です)"
+                    print(f"Tide data not found by extract_tide_from_pdf for {current_year}/{month}/{day} {hour}h for user {user_id} (extract_tide_from_pdf returned None).")
+            except Exception as e:
+                # This catches unexpected errors from within extract_tide_from_pdf
+                error_details = traceback.format_exc()
+                print(f"ERROR: Unexpected error during PDF extraction for {current_year}/{month}/{day} {hour}h for user {user_id}: {e}\n{error_details}")
+                reply_text = f"{current_year}年{month}月{day}日 {hour}時{minute_str}分の潮位データの取得中に予期せぬエラーが発生しました。管理者に連絡してください。"
+        else:
+            # download_tide_pdf returned None
+            reply_text = f"潮位情報PDF（{current_year}年分）のダウンロードに失敗しました。JMAのサイトでPDFが利用可能か確認してください。時間をおいて再度お試しいただくか、管理者に連絡してください。"
+            print(f"PDF download failed for year {current_year} for user {user_id}.")
+
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
+        user_states.pop(user_id, None) # Clear state after attempt (success or failure to get data)
+        return
 
     # 2. logout 処理
     if text.lower() == "logout":
