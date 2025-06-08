@@ -8,3 +8,4 @@ bs4
 requests
 beautifulsoup4
 PyPDF2
+pdfplumber
