@@ -681,6 +681,7 @@ def handle_message(event):
             )
         return
 
+
      # login処理
     if text.lower() == "login":
         users = worksheet.get_all_values()  # 必ず毎回取得
