@@ -587,12 +587,12 @@ def handle_message(event):
 
     # helpコマンド
         if text.lower() == "help":
-        msg = get_help_message(user_id)
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text=msg)
-        )
-        return         
+            msg = get_help_message(user_id)
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=msg)
+            )
+            return         
         
         if text.lower() in ["readme", "r"]:
             flex_msg = FlexSendMessage(
