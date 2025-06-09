@@ -31,11 +31,18 @@ credentials_json_str = os.environ.get("GOOGLE_CREDENTIALS_JSON")
 if credentials_json_str is None:
     raise ValueError("GOOGLE_CREDENTIALS_JSON が設定されていません。")
 
+credentials_info = json.loads(credentials_json_str)
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
+creds = Credentials.from_service_account_info(credentials_info, scopes=SCOPES)
 
 # ユーザデータ用スプレッドシートURLで明示的に指定
 USER_DATABASE_URL = "https://docs.google.com/spreadsheets/d/1wZR1Tdupldp0RVOm00QAbE9-muz47unt_WhxagdirFA/"
 user_db_spreadsheet = gspread.authorize(creds).open_by_url(USER_DATABASE_URL)
 worksheet = user_db_spreadsheet.worksheet("users")
+
 
 IDT_RECORD_URL = os.environ.get("IDT_RECORD_URL", "https://docs.google.com/spreadsheets/d/11ZlpV2yl9aA3gxpS-JhBxgNniaxlDP1NO_4XmpGvg54/edit")
 idt_record_sheet = gspread.authorize(creds).open_by_url(IDT_RECORD_URL).worksheet("database")
