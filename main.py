@@ -17,6 +17,7 @@ import traceback
 import io
 from PyPDF2 import PdfReader
 import tempfile
+from linebot.models import FlexSendMessage
 
 app = Flask(__name__)
 
@@ -30,12 +31,6 @@ credentials_json_str = os.environ.get("GOOGLE_CREDENTIALS_JSON")
 if credentials_json_str is None:
     raise ValueError("GOOGLE_CREDENTIALS_JSON が設定されていません。")
 
-credentials_info = json.loads(credentials_json_str)
-SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive"
-]
-creds = Credentials.from_service_account_info(credentials_info, scopes=SCOPES)
 
 # ユーザデータ用スプレッドシートURLで明示的に指定
 USER_DATABASE_URL = "https://docs.google.com/spreadsheets/d/1wZR1Tdupldp0RVOm00QAbE9-muz47unt_WhxagdirFA/"
@@ -586,9 +581,41 @@ def handle_message(event):
     # helpコマンド
     if text.lower() == "help":
         msg = get_help_message(user_id)
+
+        flex_msg = FlexSendMessage(
+            alt_text="Botの使い方はこちら",
+            contents={
+                "type": "bubble",
+                "body": {
+                    "type": "box",
+                    "layout": "vertical",
+                    "contents": [
+                        {"type": "text", "text": "📘 Botの使い方", "weight": "bold", "size": "lg"},
+                        {"type": "text", "text": "以下のリンクから詳細なREADMEが見られます。", "size": "sm", "wrap": True}
+                    ]
+                },
+                "footer": {
+                    "type": "box",
+                    "layout": "vertical",
+                    "spacing": "sm",
+                    "contents": [
+                        {
+                            "type": "button",
+                            "style": "primary",
+                            "action": {
+                                "type": "uri",
+                                "label": "READMEを見る",
+                                "uri": "https://github.com/Aho0526/Line-bot#readme"
+                            }
+                        }
+                    ]
+                }
+            }
+        )
+
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(text=msg)
+            messages=[TextSendMessage(text=msg), flex_msg]
         )
         return         
     
