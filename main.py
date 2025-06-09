@@ -585,17 +585,18 @@ def handle_message(event):
         )
         return
 
-    # helpコマンド
-        if text.lower() == "help":
-            msg = get_help_message(user_id)
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text=msg)
-            )
-            return         
-        
-        if text.lower() in ["readme", "r"]:
-            flex_msg = FlexSendMessage(
+# helpコマンド
+    if text.lower() == "help":
+        msg = get_help_message(user_id)
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=msg)
+        )
+        return         
+
+# readme / r コマンド
+    if text.lower() in ["readme", "r"]:
+        flex_msg = FlexSendMessage(
             alt_text="Botの使い方はこちら",
             contents={
                 "type": "bubble",
@@ -603,8 +604,18 @@ def handle_message(event):
                     "type": "box",
                     "layout": "vertical",
                     "contents": [
-                        {"type": "text", "text": "📘 Botの使い方", "weight": "bold", "size": "lg"},
-                        {"type": "text", "text": "以下のリンクから詳細なREADMEが見られます。(外部サイトに遷移します。)", "size": "sm", "wrap": True}
+                        {
+                            "type": "text",
+                            "text": "📘 Botの使い方",
+                            "weight": "bold",
+                            "size": "lg"
+                        },
+                        {
+                            "type": "text",
+                            "text": "以下のリンクから詳細なREADMEが見られます。(外部サイトに遷移します。)",
+                            "size": "sm",
+                            "wrap": True
+                        }
                     ]
                 },
                 "footer": {
@@ -625,13 +636,13 @@ def handle_message(event):
                 }
             }
         )
-
         line_bot_api.reply_message(
             event.reply_token,
             messages=[flex_msg]
         )
         return
-    
+
+    # tideコマンド
     if text.lower() == "tide":
         user_states[user_id] = {"mode": "awaiting_tide_datetime"}
         reply_text = "潮位を調べる日付と時刻を「月/日 時:分」（例: 6/8 16:00）の形式で教えてください。"
@@ -716,6 +727,7 @@ def handle_message(event):
                 TextSendMessage(text="ログアウト処理中にエラーが発生しました。管理者に連絡してください。")
             )
         return
+
 
      # login処理
     if text.lower() == "login":
