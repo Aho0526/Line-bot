@@ -586,10 +586,16 @@ def handle_message(event):
         return
 
     # helpコマンド
-    if text.lower() == "help":
+        if text.lower() == "help":
         msg = get_help_message(user_id)
-
-        flex_msg = FlexSendMessage(
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=msg)
+        )
+        return         
+        
+        if text.lower() in ["readme", "r"]:
+            flex_msg = FlexSendMessage(
             alt_text="Botの使い方はこちら",
             contents={
                 "type": "bubble",
@@ -598,7 +604,7 @@ def handle_message(event):
                     "layout": "vertical",
                     "contents": [
                         {"type": "text", "text": "📘 Botの使い方", "weight": "bold", "size": "lg"},
-                        {"type": "text", "text": "以下のリンクから詳細なREADMEが見られます。", "size": "sm", "wrap": True}
+                        {"type": "text", "text": "以下のリンクから詳細なREADMEが見られます。(外部サイトに遷移します。)", "size": "sm", "wrap": True}
                     ]
                 },
                 "footer": {
@@ -622,9 +628,9 @@ def handle_message(event):
 
         line_bot_api.reply_message(
             event.reply_token,
-            messages=[TextSendMessage(text=msg), flex_msg]
+            messages=[flex_msg]
         )
-        return         
+        return
     
     if text.lower() == "tide":
         user_states[user_id] = {"mode": "awaiting_tide_datetime"}
