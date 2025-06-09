@@ -370,20 +370,19 @@ def get_help_message(user_id):
     if is_head_admin(user_id):
         return (
             "あなたは1番管理者です。\n"
-            "“add idt”で任意の選手のIDT記録を追加できます。\n"
+            "“add idt”で任意の選手のIDT記録を管理者として追加できます。\n"
             "入力形式: 名前 学年 タイム 性別(m/w)\n"
             "例: 太郎 2 7:32.8 m\n"
-            "“admin add”で選手記録を管理者として追加（詳細機能）\n"
             "“admin approve <名前>”で管理者昇格承認（1番管理者のみ）\n"
             "“stop responding to <ユーザ名> for <時間> time because you did <理由>”で一時停止（1番管理者のみ）"
         )
     elif is_admin(user_id):
         return (
             "あなたは管理者（マネージャー）アカウントです。\n"
-            "“add idt”で任意の選手のIDT記録を追加できます。\n"
+            "“cal idt”でIDTの計算ができます\n"
+            "“add idt”で任意の選手のIDT記録を管理者として追加できます。\n"
             "入力形式: 名前 学年 タイム 性別(m/w)\n"
             "例: 太郎 2 7:32.8 m\n"
-            "“admin add”で選手記録を管理者として追加（詳細機能）"
         )
     else:
         return (
@@ -1463,9 +1462,6 @@ def handle_message(event):
                             TextSendMessage(
                                 text=(
                                     "あなたの管理者申請が承認されました。以降、個人のIDT記録など選手向け機能はご利用いただけません。\n"
-                                    "Adminアカウントの作成に進みます。\n"
-                                    "学年、希望する名前とキーを入力してください。\n"
-                                    "入力の順は 学年 名前 キー の順で入力してください。"
                                 )
                             )
                         )
