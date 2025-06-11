@@ -432,20 +432,23 @@ def handle_message(event):
     user_id = event.source.user_id
     text = event.message.text.strip()
 
+    # 無効なreply_tokenかどうかチェック
+    if event.reply_token == "00000000000000000000000000000000" or event.reply_token == "ffffffffffffffffffffffffffffffff":
+        print("[INFO] Invalid reply_token detected. Skipping reply.")
+        return  # LINEの仕様による検証イベントなどでは返信不要
 
     # 1. アカウント停止中チェック
     is_sus, delta, reason, _ = check_suspend(user_id)
     if is_sus:
         mins = int(delta.total_seconds() // 60)
         hours = delta.total_seconds() / 3600
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(
-                text=f"あなたは「{reason}」をしたので、あと{hours:.1f}時間（{mins}分）の間Botからの応答が制限されます。"
-            )
-        )
+        if hours < 1:
+            msg = f"⏱️ アカウントは一時停止中です（あと{mins}分）\n理由：{reason}"
+        else:
+            msg = f"⏱️ アカウントは一時停止中です（あと{hours:.1f}時間）\n理由：{reason}"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=msg))
         return
-# cal idtコマンド
+
     if text.lower() == "cal idt":
         users = worksheet.get_all_values()
         header = users[0]
@@ -593,6 +596,10 @@ def handle_message(event):
         )
         return         
 
+    if text.lower() == "ping":
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="pong!"))
+        return
+        
 # readme / r コマンド
     if text.lower() in ["readme", "r"]:
         flex_msg = FlexSendMessage(
