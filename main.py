@@ -85,112 +85,82 @@ def download_tide_pdf(year: int) -> str | None:
             for chunk in res.iter_content(chunk_size=8192):
                 temp_pdf_file.write(chunk)
             temp_pdf_file.close()
-            print(f"Debug: PDF downloaded and saved to temporary file: {temp_pdf_file.name}")
             return temp_pdf_file.name
         else:
             print(f"Error downloading PDF: Status {res.status_code} for URL {url}")
             return None
     except requests.exceptions.RequestException as e:
         print(f"RequestException while downloading PDF from {url}: {e}")
-        if temp_pdf_file: # If temp file was created before exception
+        if temp_pdf_file: 
             temp_pdf_file.close()
             os.remove(temp_pdf_file.name)
         return None
     except Exception as e:
         print(f"An unexpected error occurred while downloading or writing PDF from {url}: {e}")
-        if temp_pdf_file: # If temp file was created before exception
+        if temp_pdf_file: 
             temp_pdf_file.close()
             try:
                 os.remove(temp_pdf_file.name)
-            except OSError: # e.g. if file was not actually created due to error during NamedTemporaryFile call itself
+            except OSError:
                 pass
         return None
 
+### 変更点 ###
+# 潮位PDFから指定日時の潮位を抽出するロジックを実装
 def extract_tide_from_pdf(pdf_filepath: str, target_month: int, target_day: int, target_hour: int) -> int | None:
     """
-    Extracts the tide level for a specific date and hour from a PDF file.
+    Extracts the tide level for a specific date and hour from a JMA PDF file.
     """
     try:
         reader = PdfReader(pdf_filepath)
-        print(f"Debug: Successfully opened PDF with PyPDF2. Total pages: {len(reader.pages)}")
-
-        for i, page_obj in enumerate(reader.pages):
-            try:
-                text = page_obj.extract_text()
-                print(f"--- PyPDF2 Page {i+1} Text (first 300 chars) ---")
-                print(text[:300] if text else "No text found on page with PyPDF2")
-                print("--- End of PyPDF2 Page Sample ---")
-            except Exception as page_e:
-                print(f"Error extracting text from page {i+1} with PyPDF2: {page_e}")
-            if i >= 2: # For initial testing, only try to print text from first 3 pages
-                print("Debug: PyPDF2 processed first few pages for initial text dump.")
-                break 
         
-        print("Debug: extract_tide_from_pdf (PyPDF2) returning None after attempting text extraction.")
-        return None
+        # 月はPDFのページ番号に対応 (1月 -> 0ページ目)
+        if not (0 <= target_month - 1 < len(reader.pages)):
+            print(f"Error: Invalid month {target_month} for PDF with {len(reader.pages)} pages.")
+            return None
+            
+        page = reader.pages[target_month - 1]
+        text = page.extract_text()
+        
+        lines = text.split('\n')
+        
+        # データ行を走査して目的の日の潮位を探す
+        for line in lines:
+            # 行頭がスペースと数字で始まっている行を対象とする (例: " 1 ", "10 ")
+            line_strip = line.strip()
+            if not line_strip or not line_strip[0].isdigit():
+                continue
+
+            # 行をスペースで分割
+            parts = re.split(r'\s+', line_strip)
+            
+            # 最初の部分が日付のはず
+            try:
+                day = int(parts[0])
+            except (ValueError, IndexError):
+                continue
+
+            if day == target_day:
+                # 該当日の行を見つけた
+                # parts[0]は日付なので、潮位データはparts[1:]にある
+                # 0時のデータは parts[1] に対応
+                tide_values = parts[1:]
+                
+                if 0 <= target_hour < len(tide_values):
+                    tide_value_str = tide_values[target_hour]
+                    if tide_value_str.isdigit():
+                        return int(tide_value_str)
+                
+                # もし見つかればその時点で終了
+                return None
+                
+        return None # 最後まで見つからなかった場合
 
     except Exception as e:
-        # import traceback # traceback is already globally imported
         error_details = traceback.format_exc()
-        # Note: PyPDF2 might have specific exceptions for syntax errors, e.g., from PyPDF2.errors import PdfReadError
-        # For now, general Exception is fine for this debugging phase.
         print(f"Error during PDF processing with PyPDF2 for {pdf_filepath}: {e}\n{error_details}")
         return None
 
-
-# def get_kochi_tide_table(): # REMOVED as per new PDF-based flow
-#     now = datetime.datetime.now()
-#     ym = now.strftime("%Y%m")
-#     url = "https://www.data.jma.go.jp/kaiyou/db/tide/suisan/suisan.php"
-#     payload = {
-#         "stn": "KOCHI",
-#         "ym": ym,
-#         "mode": "1"
-#     }
-#     headers = {
-#         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-#     }
-#     res = requests.post(url, data=payload, headers=headers)
-#     print(f"JMA Request Status Code: {res.status_code}")
-#     print(f"JMA Response Text Snippet: {res.text[:500]}")
-#     res.encoding = res.apparent_encoding
-#     soup = BeautifulSoup(res.text, "html.parser")
-#     tables = soup.find_all("table")
-#     print(f"Number of tables found: {len(tables)}")
-#     if not tables:
-#         # This case is already handled by the print statement from the previous change.
-#         # print("No tables found on the page.")
-#         return "潮位データのテーブルが見つかりませんでした。"
-#
-#     if len(tables) < 2:
-#         # Log the actual number of tables found if it's less than 2
-#         error_message = f"潮位データテーブルの数が期待値未満です。テーブル数: {len(tables)}。"
-#         if tables: # If there's at least one table, try to use the first one as a fallback
-#             print(f"警告: {error_message} 最初のテーブルを使用します。")
-#             table = tables[0]
-#         else: # No tables found at all (this case should be caught by 'if not tables' above, but as a safeguard)
-#              print(f"エラー: {error_message}")
-#              return "潮位データのテーブルが期待通りに見つかりませんでした。サイト構成が変更された可能性があります。"
-#     else:
-#         # 2番目のテーブルが潮位データ（2024年6月時点）
-#         table = tables[1]
-#
-#     rows = table.find_all("tr")
-#     result = []
-#     for row in rows[1:6]:  # 上から5日分だけ表示
-#         cols = row.find_all("td")
-#         if len(cols) >= 5: # Expecting at least 5 columns for date, high1, high2, low1, low2
-#             date = cols[0].get_text(strip=True)
-#             high1_text = cols[1].get_text(strip=True) if len(cols) > 1 else "データなし"
-#             high2_text = cols[2].get_text(strip=True) if len(cols) > 2 else "データなし"
-#             low1_text = cols[3].get_text(strip=True) if len(cols) > 3 else "データなし"
-#             low2_text = cols[4].get_text(strip=True) if len(cols) > 4 else "データなし"
-#             result.append(f"{date} 高潮1:{high1_text} 高潮2:{high2_text} 低潮1:{low1_text} 低潮2:{low2_text}")
-#         else:
-#             print(f"警告: 潮位データ行の列数が期待未満です。列数: {len(cols)}。この行をスキップします。Row HTML: {row.prettify()}")
-#             # Optionally, append a message indicating missing data for this row
-#             # result.append(f"日付不明行: データ不完全 (列数: {len(cols)})")
-#     return "\n".join(result) if result else "潮位データが見つかりませんでした。"
 
 def get_admin_request_ban(user_id):
     rows = admin_request_ban_sheet.get_all_values()
@@ -266,108 +236,93 @@ def calc_idt(mi, se, sed, wei, gend):
     score = idtm * (1.0 - gend) + idtw * gend
     return score
 
-def get_user_name_grade(user_id):
-    users = worksheet.get_all_values()
-    if not users:
-        return None, None
-    header = [h.strip() for h in users[0]]
+### 変更点 ###
+# ヘルパー関数がシートデータ(all_users_data)を引数で受け取るように修正
+def get_user_row(user_id, all_users_data):
+    if not all_users_data or len(all_users_data) < 2:
+        return None, None, None
+    header = [h.strip() for h in all_users_data[0]]
     user_id_col = header.index("user_id")
-    name_col = header.index("name")
-    grade_col = header.index("grade")
-    for row in users[1:]:
-        if len(row) > user_id_col and row[user_id_col] and row[user_id_col] == user_id:
-            return row[name_col], row[grade_col]
+    for row in all_users_data[1:]:
+        if len(row) > user_id_col and row[user_id_col] == user_id:
+            return header, row, all_users_data.index(row)
+    return header, None, -1
+
+def get_user_name_grade(user_id, all_users_data):
+    header, user_row, _ = get_user_row(user_id, all_users_data)
+    if user_row:
+        name_col = header.index("name")
+        grade_col = header.index("grade")
+        return user_row[name_col], user_row[grade_col]
     return None, None
 
-def get_last_auth(user_id):
-    users = worksheet.get_all_values()
-    if not users or len(users) < 2:
-        return None
-    header = users[0]
-    user_id_col = header.index("user_id")
-    last_auth_col = header.index("last_auth")
-    for row in users[1:]:
-        if row[user_id_col] == user_id:
-            if len(row) > last_auth_col:
-                value = row[last_auth_col]
-                if value == "":
-                    return None
-                return value
+def get_last_auth(user_id, all_users_data):
+    header, user_row, _ = get_user_row(user_id, all_users_data)
+    if user_row:
+        last_auth_col = header.index("last_auth")
+        if len(user_row) > last_auth_col:
+            value = user_row[last_auth_col]
+            return value if value != "" else None
     return None
 
 def set_last_auth(user_id, dt=None):
     users = worksheet.get_all_values()
-    if not users or len(users) < 2:
-        return
-    header = users[0]
-    user_id_col = header.index("user_id")
-    last_auth_col = header.index("last_auth")
-    for i, row in enumerate(users[1:], start=2):
-        if row[user_id_col] == user_id:
-            worksheet.update_cell(i, last_auth_col+1, dt if dt else now_str())
-            return
+    header, user_row, row_index = get_user_row(user_id, users)
+    if user_row:
+        last_auth_col = header.index("last_auth")
+        # gspreadの行インデックスは1から始まるので+1する
+        worksheet.update_cell(row_index + 1, last_auth_col + 1, dt if dt else now_str())
 
 def ensure_header():
     header = worksheet.row_values(1)
-    required = ["name", "grade", "key", "user_id", "last_auth", "admin"]
+    required = ["name", "grade", "key", "user_id", "last_auth", "admin", "gender"]
     for col in required:
         if col not in header:
             worksheet.update_cell(1, len(header) + 1, col)
             header.append(col)
     return worksheet.row_values(1)
 
-def get_admin_number_to_userid():
-    users = worksheet.get_all_values()
-    header = users[0]
+def get_admin_number_to_userid(all_users_data):
+    if not all_users_data or len(all_users_data) < 2:
+        return {}
+    header = all_users_data[0]
     user_id_col = header.index("user_id")
     admin_col = header.index("admin")
     number_to_userid = {}
-    for row in users[1:]:
+    for row in all_users_data[1:]:
         if len(row) > admin_col and row[admin_col].isdigit():
             number_to_userid[int(row[admin_col])] = row[user_id_col]
     return number_to_userid
 
-def get_next_admin_number():
-    users = worksheet.get_all_values()
-    header = users[0]
+def get_next_admin_number(all_users_data):
+    if not all_users_data or len(all_users_data) < 2:
+        return 1
+    header = all_users_data[0]
     admin_col = header.index("admin")
-    nums = {int(row[admin_col]) for row in users[1:] if row[admin_col].isdigit()}
+    nums = {int(row[admin_col]) for row in all_users_data[1:] if len(row) > admin_col and row[admin_col].isdigit()}
     n = 1
     while n in nums:
         n += 1
     return n
 
-def get_user_row_by_name(name):
-    users = worksheet.get_all_values()
-    header = users[0]
-    name_col = header.index("name")
-    for i, row in enumerate(users[1:], start=2):
-        if row[name_col] == name:
-            return i, row
-    return None, None
-
-def is_admin(user_id):
-    users = worksheet.get_all_values()
-    header = users[0]
-    user_id_col = header.index("user_id")
-    admin_col = header.index("admin")
-    for row in users[1:]:
-        if row[user_id_col] == user_id and row[admin_col].isdigit():
+def is_admin(user_id, all_users_data):
+    header, user_row, _ = get_user_row(user_id, all_users_data)
+    if user_row:
+        admin_col = header.index("admin")
+        if len(user_row) > admin_col and user_row[admin_col].isdigit():
             return True
     return False
 
-def is_head_admin(user_id):
-    users = worksheet.get_all_values()
-    header = users[0]
-    user_id_col = header.index("user_id")
-    admin_col = header.index("admin")
-    for row in users[1:]:
-        if row[user_id_col] == user_id and row[admin_col] == "1":
+def is_head_admin(user_id, all_users_data):
+    header, user_row, _ = get_user_row(user_id, all_users_data)
+    if user_row:
+        admin_col = header.index("admin")
+        if len(user_row) > admin_col and user_row[admin_col] == "1":
             return True
     return False
 
-def get_help_message(user_id):
-    if is_head_admin(user_id):
+def get_help_message(user_id, all_users_data):
+    if is_head_admin(user_id, all_users_data):
         return (
             "あなたは1番管理者です。\n"
             "“add idt”で任意の選手のIDT記録を管理者として追加できます。\n"
@@ -376,7 +331,7 @@ def get_help_message(user_id):
             "“admin approve <名前>”で管理者昇格承認（1番管理者のみ）\n"
             "“stop responding to <ユーザ名> for <時間> time because you did <理由>”で一時停止（1番管理者のみ）"
         )
-    elif is_admin(user_id):
+    elif is_admin(user_id, all_users_data):
         return (
             "あなたは管理者（マネージャー）アカウントです。\n"
             "“cal idt”でIDTの計算ができます\n"
@@ -432,34 +387,31 @@ def handle_message(event):
     user_id = event.source.user_id
     text = event.message.text.strip()
 
-    # 無効なreply_tokenかどうかチェック
-    if event.reply_token == "00000000000000000000000000000000" or event.reply_token == "ffffffffffffffffffffffffffffffff":
-        print("[INFO] Invalid reply_token detected. Skipping reply.")
-        return  # LINEの仕様による検証イベントなどでは返信不要
+    ### 変更点 ###
+    # handle_messageの冒頭で一度だけシートから全データを取得
+    all_users_data = worksheet.get_all_values()
+    header, user_row, user_row_index = get_user_row(user_id, all_users_data)
+
 
     # 1. アカウント停止中チェック
     is_sus, delta, reason, _ = check_suspend(user_id)
     if is_sus:
         mins = int(delta.total_seconds() // 60)
         hours = delta.total_seconds() / 3600
-        if hours < 1:
-            msg = f"⏱️ アカウントは一時停止中です（あと{mins}分）\n理由：{reason}"
-        else:
-            msg = f"⏱️ アカウントは一時停止中です（あと{hours:.1f}時間）\n理由：{reason}"
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=msg))
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(
+                text=f"あなたは「{reason}」をしたので、あと{hours:.1f}時間（{mins}分）の間Botからの応答が制限されます。"
+            )
+        )
         return
-
+        
+# cal idtコマンド
     if text.lower() == "cal idt":
-        users = worksheet.get_all_values()
-        header = users[0]
-        user_id_col = header.index("user_id")
-        last_auth_col = header.index("last_auth")
-        found_row = None
-        for row in users[1:]:
-            if row[user_id_col] == user_id:
-                found_row = row
-                break
-        if found_row and found_row[last_auth_col] != "LOGGED_OUT":
+        # ログイン状態をキャッシュしたデータから判定
+        last_auth = get_last_auth(user_id, all_users_data)
+        
+        if user_row and last_auth != "LOGGED_OUT":
             user_states[user_id] = {"mode": "cal_idt_login"}
             line_bot_api.reply_message(
                 event.reply_token,
@@ -509,16 +461,12 @@ def handle_message(event):
                 TextSendMessage(text="体重は数値で入力してください。")
             )
             return
-        # 性別はシートから取得
-        users = worksheet.get_all_values()
-        header = users[0]
-        user_id_col = header.index("user_id")
-        gender_col = header.index("gender")
+        
         gender = None
-        for row in users[1:]:
-            if row[user_id_col] == user_id:
-                gender = row[gender_col]
-                break
+        if user_row and "gender" in header:
+            gender_col = header.index("gender")
+            gender = user_row[gender_col]
+
         if gender is None or gender.lower() not in ("m", "w"):
             line_bot_api.reply_message(
                 event.reply_token,
@@ -589,17 +537,13 @@ def handle_message(event):
 
 # helpコマンド
     if text.lower() == "help":
-        msg = get_help_message(user_id)
+        msg = get_help_message(user_id, all_users_data)
         line_bot_api.reply_message(
             event.reply_token,
             TextSendMessage(text=msg)
         )
         return         
 
-    if text.lower() == "ping":
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="pong!"))
-        return
-        
 # readme / r コマンド
     if text.lower() in ["readme", "r"]:
         flex_msg = FlexSendMessage(
@@ -670,50 +614,40 @@ def handle_message(event):
             month = int(month_str)
             day = int(day_str)
             hour = int(hour_str)
-            # minute = int(minute_str) # minute is not used for extraction logic with extract_tide_from_pdf yet
 
-            # Basic validation
-            # More specific day validation (e.g., days in month) can be added if needed.
             if not (1 <= month <= 12 and 1 <= day <= 31 and 0 <= hour <= 23):
                 raise ValueError("日付または時刻の範囲が無効です。")
 
-        except ValueError as ve:
-            print(f"Debug: Date/Time validation error for input '{text_input}': {ve}")
+        except ValueError:
             reply_text = "日付または時刻の範囲が正しくありません。実在する日時を入力してください。（例: 6/8 16:00）"
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
             user_states.pop(user_id, None) # Clear state on invalid date logic
             return
 
         current_year = datetime.datetime.now().year
-        # Attempt to download the PDF for the current year
-        # In a future enhancement, we might need to ask the user for the year if it's not the current one.
-        print(f"User {user_id} requested tide for {current_year}/{month}/{day} {hour}:{minute_str}. Downloading PDF for {current_year}.")
-        pdf_bytes = download_tide_pdf(current_year)
-
-        if pdf_bytes:
-            print(f"PDF for {current_year} downloaded successfully for user {user_id}. Size: {len(pdf_bytes)} bytes. Now extracting tide data.")
-            try:
-                # Pass integer hour for extraction logic
-                tide_value = extract_tide_from_pdf(pdf_bytes, month, day, hour)
+        
+        pdf_filepath = None
+        try:
+            pdf_filepath = download_tide_pdf(current_year)
+            if pdf_filepath:
+                tide_value = extract_tide_from_pdf(pdf_filepath, month, day, hour)
                 if tide_value is not None:
-                    reply_text = f"{current_year}年{month}月{day}日 {hour}時{minute_str}分の潮位は {tide_value} cmです。"
+                    reply_text = f"高知港の{current_year}年{month}月{day}日 {hour}時の潮位は、約 {tide_value} cmです。"
                 else:
-                    # This case means extract_tide_from_pdf ran but didn't find the data,
-                    # or it's still in its placeholder state.
-                    reply_text = f"{current_year}年{month}月{day}日 {hour}時{minute_str}分の潮位データは見つかりませんでした。(PDFからの詳細解析処理は開発中です)"
-                    print(f"Tide data not found by extract_tide_from_pdf for {current_year}/{month}/{day} {hour}h for user {user_id} (extract_tide_from_pdf returned None).")
-            except Exception as e:
-                # This catches unexpected errors from within extract_tide_from_pdf
-                error_details = traceback.format_exc()
-                print(f"ERROR: Unexpected error during PDF extraction for {current_year}/{month}/{day} {hour}h for user {user_id}: {e}\n{error_details}")
-                reply_text = f"{current_year}年{month}月{day}日 {hour}時{minute_str}分の潮位データの取得中に予期せぬエラーが発生しました。管理者に連絡してください。"
-        else:
-            # download_tide_pdf returned None
-            reply_text = f"潮位情報PDF（{current_year}年分）のダウンロードに失敗しました。JMAのサイトでPDFが利用可能か確認してください。時間をおいて再度お試しいただくか、管理者に連絡してください。"
-            print(f"PDF download failed for year {current_year} for user {user_id}.")
+                    reply_text = f"{current_year}年{month}月{day}日 {hour}時の潮位データは見つかりませんでした。日付が正しいか確認してください。"
+            else:
+                reply_text = f"潮位情報PDF（{current_year}年分）のダウンロードに失敗しました。時間をおいて再試行してください。"
+        
+        except Exception as e:
+            print(f"ERROR: Unhandled error in tide processing: {e}\n{traceback.format_exc()}")
+            reply_text = "潮位の取得中に予期せぬエラーが発生しました。管理者に連絡してください。"
+        
+        finally:
+            if pdf_filepath and os.path.exists(pdf_filepath):
+                os.remove(pdf_filepath)
 
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
-        user_states.pop(user_id, None) # Clear state after attempt (success or failure to get data)
+        user_states.pop(user_id, None) # Clear state after attempt
         return
 
     # 2. logout 処理
@@ -737,32 +671,17 @@ def handle_message(event):
 
      # login処理
     if text.lower() == "login":
-        users = worksheet.get_all_values()  # 必ず毎回取得
-        if not users or len(users) < 2:
+        if not all_users_data or len(all_users_data) < 2:
             line_bot_api.reply_message(
                 event.reply_token,
                 TextSendMessage(text="ユーザーデータベースが空です。管理者に連絡してください。")
             )
             return
-        header = users[0]
-        user_id_col = header.index("user_id")
-        name_col = header.index("name")
-        grade_col = header.index("grade")
-        gender_col = header.index("gender") if "gender" in header else None
-        key_col = header.index("key")
-        last_auth_col = header.index("last_auth")
-        data = users[1:] if len(users) > 1 else []
 
-        # user_idが既に登録されている場合
-        found_row = None
-        for row in users[1:]:
-            if row[user_id_col] == user_id:
-                found_row = row
-                break
-
-        if found_row:
-            user_name = found_row[name_col]
-            last_auth = found_row[last_auth_col] if len(found_row) > last_auth_col else ""
+        if user_row:
+            user_name = user_row[header.index("name")]
+            last_auth = get_last_auth(user_id, all_users_data)
+            
             # シートの内容でログイン状態を判定
             if last_auth != "LOGGED_OUT":
                 user_states[user_id] = {'mode': 'login_confirm', 'name': user_name}
@@ -770,14 +689,12 @@ def handle_message(event):
                     event.reply_token,
                     TextSendMessage(text=f'「{user_name}」としてログインしますか？（はい／いいえ）')
                 )
-                return
             else:
                 user_states[user_id] = {'mode': 'login_confirm', 'name': user_name}
                 line_bot_api.reply_message(
                     event.reply_token,
                     TextSendMessage(text=f'「{user_name}」としてログインしますか？（はい／いいえ）')
                 )
-                return
         else:
             # サインアップ未登録
             user_states[user_id] = {'mode': 'signup'}
@@ -787,7 +704,7 @@ def handle_message(event):
                     text="初回登録です。学年 名前 性別(m/w) キー をスペース区切りで入力してください。\n例: 2 太郎 m tarou123"
                 )
             )
-            return
+        return
 
     if user_id in user_states and user_states[user_id].get('mode') == 'signup':
         parts = text.strip().split()
@@ -810,18 +727,12 @@ def handle_message(event):
                 TextSendMessage(text="性別は m か w で入力してください。")
             )
             return
-        users = worksheet.get_all_values()
-        header = users[0]
+        
         name_col = header.index("name")
         grade_col = header.index("grade")
-        key_col = header.index("key")
-        user_id_col = header.index("user_id")
-        last_auth_col = header.index("last_auth")
-        admin_col = header.index("admin")
-        gender_col = header.index("gender") if "gender" in header else None
 
-        # 重複チェック
-        for row in users[1:]:
+        # 重複チェック (キャッシュされたデータを使用)
+        for row in all_users_data[1:]:
             if row[name_col] == name and row[grade_col] == grade:
                 line_bot_api.reply_message(
                     event.reply_token,
@@ -839,7 +750,9 @@ def handle_message(event):
             "last_auth": now_str(),
             "admin": ""
         }
-        new_row = [row_dict.get(col, "") for col in header]
+        # headerをensure_headerで最新化
+        current_header = ensure_header()
+        new_row = [row_dict.get(col, "") for col in current_header]
         try:
             worksheet.append_row(new_row, value_input_option="USER_ENTERED")
         except Exception as e:
@@ -848,14 +761,7 @@ def handle_message(event):
                 TextSendMessage(text=f"スプレッドシートへの書き込みに失敗しました: {e}")
             )
             return
-        try:
-            set_last_auth(user_id, now_str())
-        except Exception as e:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text=f"last_authの更新に失敗しました: {e}")
-            )
-            return
+        
         user_states.pop(user_id)
         line_bot_api.reply_message(
             event.reply_token,
@@ -866,17 +772,7 @@ def handle_message(event):
     # login_confirmフロー
     if user_id in user_states and user_states[user_id].get('mode') == 'login_confirm':
         if text.lower() in ["はい", "はい。", "yes", "yes.", "y"]:
-            # ここで再度シートを確認
-            users = worksheet.get_all_values()
-            header = users[0]
-            user_id_col = header.index("user_id")
-            name_col = header.index("name")
-            found = False
-            for row in users[1:]:
-                if row[user_id_col] == user_id and row[name_col] == user_states[user_id]['name']:
-                    found = True
-                    break
-            if not found:
+            if not user_row:
                 user_states.pop(user_id)
                 line_bot_api.reply_message(
                     event.reply_token,
@@ -904,7 +800,7 @@ def handle_message(event):
             )
             return
 
-    # login_switchフロー（OTP認証開始前の確認）
+    # login_switchフロー
     if user_id in user_states and user_states[user_id].get('mode') == 'login_switch':
         parts = text.strip().split()
         if len(parts) != 3:
@@ -914,20 +810,22 @@ def handle_message(event):
             )
             return
         grade, name, key = parts
-        users = worksheet.get_all_values()
-        header = users[0]
+        
         name_col = header.index("name")
         grade_col = header.index("grade")
         key_col = header.index("key")
         user_id_col = header.index("user_id")
-        found_row = None
-        for i, row in enumerate(users[1:], start=2):
+        found_target_row = None
+        target_row_gspread_index = -1
+        
+        for i, row in enumerate(all_users_data[1:], start=2):
             if row[name_col] == name and row[grade_col] == grade and row[key_col] == key:
-                found_row = (i, row)
+                found_target_row = row
+                target_row_gspread_index = i
                 break
-        if found_row:
-            target_row = found_row[0]
-            target_user_id = found_row[1][user_id_col]
+
+        if found_target_row:
+            target_user_id = found_target_row[user_id_col]
             if target_user_id == user_id:
                 set_last_auth(user_id, now_str())
                 user_states.pop(user_id)
@@ -936,10 +834,10 @@ def handle_message(event):
                     TextSendMessage(text=f"「{name}」としてログインしました。")
                 )
                 return
-              # user_idが異なる場合、確認メッセージを送信
+              
             user_states[user_id] = {
                 'mode': 'login_switch_confirm',
-                'target_row': target_row,
+                'target_row': target_row_gspread_index,
                 'target_user_id': target_user_id,
                 'name': name,
                 'grade': grade,
@@ -967,19 +865,15 @@ def handle_message(event):
             )
             return
 
-    # login_switch_confirmフロー（選択肢に応じて分岐）
+    # login_switch_confirmフロー
     if user_id in user_states and user_states[user_id].get('mode') == 'login_switch_confirm':
         choice = text.strip()
         state = user_states[user_id]
         if choice == "コードを送信":
-            # OTP生成・送信
             otp = generate_otp()
             otp_store[state['target_user_id']] = {
-                "otp": otp,
-                "requester_id": user_id,
-                "name": state['name'],
-                "timestamp": datetime.datetime.now(),
-                "try_count": 0,
+                "otp": otp, "requester_id": user_id, "name": state['name'],
+                "timestamp": datetime.datetime.now(), "try_count": 0,
                 "expire": datetime.datetime.now() + datetime.timedelta(minutes=10)
             }
             line_bot_api.push_message(
@@ -997,7 +891,7 @@ def handle_message(event):
             )
             return
         elif choice == "管理者に連絡":
-            number_to_userid = get_admin_number_to_userid()
+            number_to_userid = get_admin_number_to_userid(all_users_data)
             if 1 in number_to_userid:
                 head_admin_id = number_to_userid[1]
                 line_bot_api.push_message(
@@ -1031,257 +925,156 @@ def handle_message(event):
             )
             return
 
-    # login_switch_otpフロー（OTP入力・2回ミスで1時間停止）
+    # login_switch_otpフロー
     if user_id in user_states and user_states[user_id].get('mode') == 'login_switch_otp':
         input_otp = text.strip()
         state = user_states[user_id]
         otp_info = otp_store.get(state['target_user_id'])
         now = datetime.datetime.now()
-        # 有効期限切れ
+        
         if not otp_info or now > otp_info["expire"]:
-            if otp_info:
-                otp_store.pop(state['target_user_id'])
+            if otp_info: otp_store.pop(state['target_user_id'])
             user_states.pop(user_id)
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="このコードは10分経過したため無効になりました。最初からやり直してください。")
-            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="このコードは10分経過したため無効になりました。最初からやり直してください。"))
             return
-        # OTPチェック
+        
         if input_otp == otp_info["otp"]:
-            # 30分以内かチェック
             if (now - state['otp_start']).total_seconds() > 1800:
                 otp_store.pop(state['target_user_id'])
                 user_states.pop(user_id)
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text="操作開始から30分経過したため、やり直してください。")
-                )
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="操作開始から30分経過したため、やり直してください。"))
                 return
-            # アカウント切り替え前の最終確認
+            
             user_states[user_id]['mode'] = 'login_switch_final_confirm'
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(
-                    text="この操作を行うと元のアカウント（旧端末側）は消失します。\n本当に切り替えてよいですか？（ok/キャンセル）"
-                )
-            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="この操作を行うと元のアカウント（旧端末側）は消失します。\n本当に切り替えてよいですか？（ok/キャンセル）"))
             return
         else:
             otp_info["try_count"] += 1
             if otp_info["try_count"] >= 2:
-                # 1時間停止
                 until = (jst_now() + datetime.timedelta(hours=1)).strftime("%Y/%m/%d %H:%M")
                 suspend_sheet.append_row([user_id, until, "OTP2回ミス"])
-                # 管理者に通知
-                number_to_userid = get_admin_number_to_userid()
+                
+                number_to_userid = get_admin_number_to_userid(all_users_data)
                 if 1 in number_to_userid:
                     head_admin_id = number_to_userid[1]
-                    line_bot_api.push_message(
-                        head_admin_id,
-                        TextSendMessage(
-                            text=f"警告: user_id={user_id} が {state['target_user_id']} のアカウントに対して2回OTPミスでログインを試みました。1時間停止処置済み。"
-                        )
-                    )
+                    line_bot_api.push_message(head_admin_id, TextSendMessage(text=f"警告: user_id={user_id} が {state['target_user_id']} のアカウントに対して2回OTPミスでログインを試みました。1時間停止処置済み。"))
+                
                 otp_store.pop(state['target_user_id'])
                 user_states.pop(user_id)
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text="確認コードを2回間違えたため、1時間操作を停止します。")
-                )
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="確認コードを2回間違えたため、1時間操作を停止します。"))
                 return
             else:
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text="確認コードが正しくありません。もう一度入力してください。")
-                )
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="確認コードが正しくありません。もう一度入力してください。"))
                 return
 
-    # login_switch_final_confirmフロー（本当に切り替えてよいか最終確認）
+    # login_switch_final_confirmフロー
     if user_id in user_states and user_states[user_id].get('mode') == 'login_switch_final_confirm':
         if text.strip().lower() == "ok":
             state = user_states[user_id]
-            # 30分以内かチェック
             if (datetime.datetime.now() - state['otp_start']).total_seconds() > 1800:
                 user_states.pop(user_id)
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text="操作開始から30分経過したため、やり直してください。")
-                )
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="操作開始から30分経過したため、やり直してください。"))
                 return
-            # 元アカウント（旧user_id）の行を削除
-            users = worksheet.get_all_values()
-            header = users[0]
-            user_id_col = header.index("user_id")
-            for i, row in enumerate(users[1:], start=2):
+
+            # Note: worksheet.delete_rows() can be slow and might fail.
+            # A safer approach is to clear the row and mark as deleted. For now, we stick to the original logic.
+            # 元のuser_idを持つ行を見つけて削除
+            users_data_for_delete = worksheet.get_all_values() # 最新のデータを取得
+            user_id_col = users_data_for_delete[0].index("user_id")
+            for i, row in enumerate(users_data_for_delete[1:], start=2):
                 if row[user_id_col] == state['target_user_id']:
                     worksheet.delete_rows(i)
                     break
-            # 新user_idで情報を引き継ぎ
+            
             worksheet.update_cell(state['target_row'], user_id_col + 1, user_id)
             set_last_auth(user_id, now_str())
             otp_store.pop(state['target_user_id'], None)
             user_states.pop(user_id)
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="アカウントの切り替えが完了しました。")
-            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="アカウントの切り替えが完了しました。"))
             return
         else:
             user_states.pop(user_id)
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="アカウント切り替えをキャンセルしました。")
-            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="アカウント切り替えをキャンセルしました。"))
             return
 
-    # アカウント削除コマンド（確認フロー付き）
+    # アカウント削除
     if text.lower() == "delete account":
         user_states[user_id] = {"mode": "delete_account_confirm"}
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(
-                text="本当にアカウントを削除しますか？（はい／いいえ）\n削除すると全てのデータが失われます。"
-            )
-        )
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="本当にアカウントを削除しますか？（はい／いいえ）\n削除すると全てのデータが失われます。"))
         return
 
     if user_id in user_states and user_states[user_id].get("mode") == "delete_account_confirm":
         if text.strip().lower() in ["はい", "yes", "はい。", "yes."]:
-            users = worksheet.get_all_values()
-            header = users[0]
-            user_id_col = header.index("user_id")
             deleted = False
-            for i, row in enumerate(users[1:], start=2):
-                if row[user_id_col] == user_id:
-                    worksheet.delete_rows(i)
-                    deleted = True
-                    break
+            if user_row_index != -1: # user_row_index is from get_user_row, 1-based index
+                worksheet.delete_rows(user_row_index + 1)
+                deleted = True
+            
             user_states.pop(user_id)
             if deleted:
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text="アカウントを削除しました。ご利用ありがとうございました。")
-                )
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="アカウントを削除しました。ご利用ありがとうございました。"))
             else:
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text="アカウントが見つかりませんでした。")
-                )
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="アカウントが見つかりませんでした。"))
         elif text.strip().lower() in ["いいえ", "no", "いいえ。", "no."]:
             user_states.pop(user_id)
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="アカウント削除をキャンセルしました。")
-            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="アカウント削除をキャンセルしました。"))
         else:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="「はい」または「いいえ」で答えてください。")
-            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="「はい」または「いいえ」で答えてください。"))
         return
 
 # add idtコマンド
     if re.match(r"^add idt($|[\s])", text, re.I):
-        users = worksheet.get_all_values()
-        header = users[0]
-        data = users[1:]
-        user_id_col = header.index("user_id")
-        last_auth_col = header.index("last_auth")
-        found_row = None
-        for row in data:
-            if row[user_id_col] == user_id:
-                found_row = row
-                break
-        if not found_row:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="IDT記録の入力にはログインが必要です。“login”でログインしてください。")
-            )
+        if not user_row:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="IDT記録の入力にはログインが必要です。“login”でログインしてください。"))
             return
-        last_auth = found_row[last_auth_col] if len(found_row) > last_auth_col else ""
+        
+        last_auth = get_last_auth(user_id, all_users_data)
         if last_auth == "LOGGED_OUT":
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="現在ログインしていないので記録することができません。“login”でログインしてください。")
-            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="現在ログインしていないので記録することができません。“login”でログインしてください。"))
             return
-        if is_admin(user_id):
+        
+        if is_admin(user_id, all_users_data):
             user_states[user_id] = {"mode": "add_idt_admin"}
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(
-                    text="管理者記録追加モードです。対象の選手「名前 学年 タイム 性別(m/w) 体重」を半角スペース区切りで入力してください。\n例: 太郎 2 7:32.8 m 56.3"
-                )
-            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="管理者記録追加モードです。対象の選手「名前 学年 タイム 性別(m/w) 体重」を半角スペース区切りで入力してください。\n例: 太郎 2 7:32.8 m 56.3"))
         else:
             user_states[user_id] = {"mode": "add_idt_user"}
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(
-                    text="IDT記録追加モードです。タイム・体重を半角スペース区切りで入力してください。\n例: 7:32.8 56.3"
-                )
-            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="IDT記録追加モードです。タイム・体重を半角スペース区切りで入力してください。\n例: 7:32.8 56.3"))
         return
 
 # 管理者によるIDT記録追加
     if user_id in user_states and user_states[user_id].get("mode") == "add_idt_admin":
         if text.strip().lower() == "end":
             user_states.pop(user_id)
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="IDT記録追加モードを終了しました。")
-            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="IDT記録追加モードを終了しました。"))
             return
         parts = text.split(" ")
         if len(parts) != 5:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="形式が正しくありません。\n名前 学年 タイム 性別 体重 の順でスペース区切りで入力してください。\n例: 太郎 2 7:32.8 m 56.3\n終了する場合は end と入力してください。")
-            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="形式が正しくありません。\n名前 学年 タイム 性別 体重 の順でスペース区切りで入力してください。\n例: 太郎 2 7:32.8 m 56.3\n終了する場合は end と入力してください。"))
             return
         name, grade, time_str, gender, weight = parts
         if gender.lower() not in ("m", "w"):
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="性別は m か w で入力してください。")
-            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="性別は m か w で入力してください。"))
             return
         t = parse_time_str(time_str)
         if not t:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="タイム形式が正しくありません。例: 7:32.8")
-            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="タイム形式が正しくありません。例: 7:32.8"))
             return
         try:
             weight = float(weight)
         except Exception:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="体重は数値で入力してください。")
-            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="体重は数値で入力してください。"))
             return
         mi, se, sed = t
         gend = 0.0 if gender.lower() == "m" else 1.0
         score = calc_idt(mi, se, sed, weight, gend)
         score_disp = round(score + 1e-8, 2)
         record_date = today_jst_ymd()
-    # 並び: name,grade,gender,record_date,time,weight,idt,admin
         row = [name, grade, gender, record_date, time_str, weight, score_disp, "1"]
         try:
             idt_record_sheet.append_row(row, value_input_option="USER_ENTERED")
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(
-                    text=f"{name}（学年:{grade}）のIDT記録を追加しました。IDT: {score_disp:.2f}%"
-                )
-            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"{name}（学年:{grade}）のIDT記録を追加しました。IDT: {score_disp:.2f}%"))
         except Exception as e:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text=f"記録に失敗しました: {e}")
-            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"記録に失敗しました: {e}"))
         user_states.pop(user_id)
         return
 
@@ -1289,68 +1082,34 @@ def handle_message(event):
     if user_id in user_states and user_states[user_id].get("mode") == "add_idt_user":
         if text.strip().lower() == "end":
             user_states.pop(user_id)
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="IDT記録追加モードを終了しました。")
-            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="IDT記録追加モードを終了しました。"))
             return
         parts = text.split(" ")
         if len(parts) != 2:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="形式が正しくありません。\nタイム 体重 の順でスペース区切りで入力してください。\n例: 7:32.8 56.3\n終了する場合は end と入力してください。")
-            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="形式が正しくありません。\nタイム 体重 の順でスペース区切りで入力してください。\n例: 7:32.8 56.3\n終了する場合は end と入力してください。"))
             return
         time_str, weight = parts
         t = parse_time_str(time_str)
         if not t:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="タイム形式が正しくありません。例: 7:32.8")
-            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="タイム形式が正しくありません。例: 7:32.8"))
             return
         try:
             weight = float(weight)
         except Exception:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="体重は数値で入力してください。")
-            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="体重は数値で入力してください。"))
             return
         mi, se, sed = t
-        users = worksheet.get_all_values()
-        header = users[0]
-        user_id_col = header.index("user_id")
-        name_col = header.index("name")
-        grade_col = header.index("grade")
-        gender_col = header.index("gender")
-        name, grade, gender = None, None, None
-        for row in users[1:]:
-            if row[user_id_col] == user_id:
-                name = row[name_col]
-                grade = row[grade_col]
-                gender = row[gender_col]
-                break
-        if not all([name, grade, gender]):
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="ユーザー情報の取得に失敗しました。再度ログインしてください。")
-            )
-            user_states.pop(user_id)
-            return
+        name = user_row[header.index("name")]
+        grade = user_row[header.index("grade")]
+        gender = user_row[header.index("gender")]
+        
         gend = 0.0 if gender.lower() == "m" else 1.0
         score = calc_idt(mi, se, sed, weight, gend)
         score_disp = round(score + 1e-8, 2)
         record_date = today_jst_ymd()
-    # 並び: name,grade,gender,record_date,time,weight,idt,admin
         row = [name, grade, gender, record_date, time_str, weight, score_disp, ""]
         idt_record_sheet.append_row(row, value_input_option="USER_ENTERED")
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(
-                text=f"あなたのIDT記録を{record_date}に追加しました。IDT: {score_disp:.2f}%"
-            )
-        )
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"あなたのIDT記録を{record_date}に追加しました。IDT: {score_disp:.2f}%"))
         user_states.pop(user_id)
         return
 
@@ -1361,16 +1120,10 @@ def handle_message(event):
             now = jst_now()
             if now < ban_until:
                 rest_days = (ban_until - now).days + 1
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text=f"あなたは以前admin requestを提出した際に認められなかったので残り{rest_days}日間は再度リクエストを提出することができません。")
-                )
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"あなたは以前admin requestを提出した際に認められなかったので残り{rest_days}日間は再度リクエストを提出することができません。"))
                 return
         user_states[user_id] = {"mode": "admin_request", "step": 1}
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text="確認のため、現在登録しているユーザー情報（名前、学年、キー）を送ってください。")
-        )
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="確認のため、現在登録しているユーザー情報（名前、学年、キー）を送ってください。"))
         return
 
     if user_id in user_states and user_states[user_id].get("mode") == "admin_request":
@@ -1378,193 +1131,131 @@ def handle_message(event):
         if step == 1:
             parts = text.split(" ")
             if len(parts) != 3:
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text="形式が正しくありません。名前 学年 キー の順でスペース区切りで入力してください。")
-                )
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="形式が正しくありません。名前 学年 キー の順でスペース区切りで入力してください。"))
                 return
             name, grade, key = parts
             user_states[user_id].update({"step": 2, "name": name, "grade": grade, "key": key})
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(
-                    text="最終確認：選手でAdminアカウントを持つことは認められていません。\n本当にリクエストを送信しますか？（はい／いいえ）"
-                )
-            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="最終確認：選手でAdminアカウントを持つことは認められていません。\n本当にリクエストを送信しますか？（はい／いいえ）"))
             return
         elif step == 2:
             if text not in ["はい", "はい。", "yes", "Yes", "YES"]:
                 user_states.pop(user_id)
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text="admin requestをキャンセルしました。")
-                )
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="admin requestをキャンセルしました。"))
                 return
             name = user_states[user_id].get("name")
             grade = user_states[user_id].get("grade")
             key = user_states[user_id].get("key")
-            header = ensure_header()
-            users = worksheet.get_all_values()
-            data = users[1:] if len(users) > 1 else []
+            
+            # Use cached data for check
             name_col = header.index("name")
             grade_col = header.index("grade")
             key_col = header.index("key")
-            user_id_col = header.index("user_id")
-            admin_col = header.index("admin")
+            
             found = False
-            for i, row in enumerate(data, start=2):
+            for row in all_users_data[1:]:
                 if row[name_col] == name and row[grade_col] == grade and row[key_col] == key:
                     found = True
                     break
+            
             if not found:
                 user_states.pop(user_id)
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text="申請失敗。あなたはユーザーとして登録されていません。")
-                )
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="申請失敗。あなたはユーザーとして登録されていません。"))
                 return
+            
             admin_request_store[user_id] = {"name": name, "grade": grade, "key": key}
-            number_to_userid = get_admin_number_to_userid()
+            number_to_userid = get_admin_number_to_userid(all_users_data)
             if 1 in number_to_userid:
                 head_admin_id = number_to_userid[1]
-                line_bot_api.push_message(
-                    head_admin_id,
-                    TextSendMessage(
-                        text=f"{name}（学年:{grade}）が管理者申請しています。\n承認する場合は「admin approve {name}」と送信してください。"
-                    )
-                )
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="管理者申請を1番管理者へ送信しました。承認されるまでお待ちください。")
-            )
+                line_bot_api.push_message(head_admin_id, TextSendMessage(text=f"{name}（学年:{grade}）が管理者申請しています。\n承認する場合は「admin approve {name}」と送信してください。"))
+            
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="管理者申請を1番管理者へ送信しました。承認されるまでお待ちください。"))
             user_states.pop(user_id)
             return
 
     if text.lower().startswith("admin approve "):
-        if not is_head_admin(user_id):
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="この操作は1番管理者のみ可能です。")
-            )
+        if not is_head_admin(user_id, all_users_data):
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="この操作は1番管理者のみ可能です。"))
             return
+        
         target_name = text[len("admin approve "):].strip()
         for request_user_id, req in list(admin_request_store.items()):
             if req["name"] == target_name:
-                users = worksheet.get_all_values()
-                header = users[0]
-                data = users[1:]
-                name_col = header.index("name")
-                admin_col = header.index("admin")
-                for i, row in enumerate(data, start=2):
+                # To apply changes, we need to fetch fresh data for this specific operation
+                current_users_data = worksheet.get_all_values()
+                current_header = current_users_data[0]
+                name_col = current_header.index("name")
+                admin_col = current_header.index("admin")
+                
+                for i, row in enumerate(current_users_data[1:], start=2):
                     if row[name_col] == target_name:
-                        next_num = get_next_admin_number()
+                        next_num = get_next_admin_number(current_users_data)
                         worksheet.update_cell(i, admin_col + 1, str(next_num))
-                        line_bot_api.reply_message(
-                            event.reply_token,
-                            TextSendMessage(text=f"{target_name}を管理者({next_num})に承認しました。")
-                        )
-                        # 管理者アカウント作成誘導メッセージ
-                        line_bot_api.push_message(
-                            request_user_id,
-                            TextSendMessage(
-                                text=(
-                                    "あなたの管理者申請が承認されました。以降、個人のIDT記録など選手向け機能はご利用いただけません。\n"
-                                )
-                            )
-                        )
+                        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"{target_name}を管理者({next_num})に承認しました。"))
+                        line_bot_api.push_message(request_user_id, TextSendMessage(text=("あなたの管理者申請が承認されました。以降、個人のIDT記録など選手向け機能はご利用いただけません。\n")))
                         admin_request_store.pop(request_user_id)
-                    
-                # 承認されなかった場合はban記録
-                set_admin_request_ban(request_user_id, days=14)
-                admin_request_store.pop(request_user_id)
-                return
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text="該当する申請が見つかりません。")
-        )
+                        
+                        # Set ban for other requests from the same user if needed
+                        set_admin_request_ban(request_user_id, days=14)
+                        return # Exit after successful approval
+        
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="該当する申請が見つかりません。"))
         return
 
     if text.lower() == "admin add":
-        if not is_admin(user_id):
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="管理者権限がありません。")
-            )
+        if not is_admin(user_id, all_users_data):
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="管理者権限がありません。"))
             return
+        
         user_states[user_id] = {'mode': 'admin_add', 'step': 1}
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(
-                text="管理者記録追加モードです。選手の「名前 性別(m/w) 結果(タイム) 体重」を半角スペース区切りで入力してください。\n例: 太郎 m 7:32.8 56.3"
-            )
-        )
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="管理者記録追加モードです。選手の「名前 性別(m/w) 結果(タイム) 体重」を半角スペース区切りで入力してください。\n例: 太郎 m 7:32.8 56.3"))
         return
 
     if user_id in user_states and user_states[user_id].get('mode') == 'admin_add':
         if admin_record_sheet is None:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="管理者記録用スプレッドシートが設定されていません。")
-            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="管理者記録用スプレッドシートが設定されていません。"))
             user_states.pop(user_id)
             return
+        
         parts = text.split(" ")
         if len(parts) != 4:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="形式が正しくありません。\n名前 性別(m/w) タイム 体重 の順でスペース区切りで入力してください。")
-            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="形式が正しくありません。\n名前 性別(m/w) タイム 体重 の順でスペース区切りで入力してください。"))
             return
+        
         name, gender, time_str, weight = parts
         if gender.lower() not in ("m", "w"):
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="性別は m か w で入力してください。")
-            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="性別は m か w で入力してください。"))
             return
+        
         t = parse_time_str(time_str)
         if not t:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="タイム形式が正しくありません。例: 7:32.8")
-            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="タイム形式が正しくありません。例: 7:32.8"))
             return
+        
         try:
             weight = float(weight)
         except Exception:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="体重は数値で入力してください。")
-            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="体重は数値で入力してください。"))
             return
+        
         gend = 0.0 if gender.lower() == "m" else 1.0
         mi, se, sed = t
         score = calc_idt(mi, se, sed, weight, gend)
         score_disp = round(score + 1e-8, 2)
         record_date = today_jst_ymd()
-        users = worksheet.get_all_values()
-        header = users[0]
+        
         name_col = header.index("name")
-        if any(row[name_col] == name for row in users[1:]):
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="既に選手として追加済みのユーザー名です。管理者からの記録追加はできません。")
-            )
+        if any(row[name_col] == name for row in all_users_data[1:]):
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="既に選手として追加済みのユーザー名です。管理者からの記録追加はできません。"))
             user_states.pop(user_id)
             return
+        
         row = [record_date, name, gender, time_str, weight, score_disp]
         try:
             admin_record_sheet.append_row(row, value_input_option="USER_ENTERED")
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text=f"管理者として{record_date}に記録を登録しました。\nIDT: {score_disp:.2f}%")
-            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"管理者として{record_date}に記録を登録しました。\nIDT: {score_disp:.2f}%"))
             user_states.pop(user_id)
         except Exception as e:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text=f"記録に失敗しました。{e}")
-            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"記録に失敗しました。{e}"))
         return
 
     return
