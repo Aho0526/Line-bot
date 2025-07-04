@@ -579,7 +579,7 @@ def handle_message(event):
                             "action": {
                                 "type": "uri",
                                 "label": "READMEを見る",
-                                "uri": "https://github.com/Aho0526/Line-bot#readme"
+                                "uri": "https://direct-preview-68679e75e78885be252c2c24.monaca.education"
                             }
                         }
                     ]
